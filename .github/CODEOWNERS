@@ -1,0 +1,10 @@
+# Review is requested automatically. Workflows and the rules files are where a
+# mistake reaches other people's machines or outlives the change, so Wil
+# reviews those as well.
+
+*                         @vithurshanselvarajah @wilbowes
+
+/.github/                 @wilbowes
+/tools/check_workflows.py @wilbowes
+/CLAUDE.md                @wilbowes
+/SECURITY.md              @wilbowes

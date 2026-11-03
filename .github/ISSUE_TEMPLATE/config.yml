@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A fault with the controller or an Echo
+    url: https://github.com/wilbowes/EchoMuse/issues
+    about: Report it in the main EchoMuse repo.
+  - name: A security problem
+    url: https://github.com/wilbowes/EchoMuse-SDK/security/advisories/new
+    about: Report it privately, not as an issue.
