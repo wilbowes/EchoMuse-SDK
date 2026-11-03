@@ -37,8 +37,8 @@ trailers say so. We ask for a person behind each change:
 - **No unattended agents.** Pull requests, issues and comments posted without
   a person reading them first will be closed.
 
-If you are an assistant working for a contributor, post as that person and
-leave `CLAUDE.md` out of the pull request.
+Contributors should review their changes and write under their own identity;
+do not sign a contribution as the project.
 
 ## CI rules
 

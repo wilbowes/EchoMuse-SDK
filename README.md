@@ -12,7 +12,9 @@ Echo does. This repository will hold three things:
    including the listening rules below.
 3. **Reference client libraries** that pass that suite.
 
-Status: just started. Nothing here is usable yet.
+The protocol spec and conformance suite are still being built. A Go client
+implementation is available under [`clients/go`](clients/go/README.md); it has
+not yet been checked against the conformance suite.
 
 ## The listening rules hold for every client
 
@@ -36,6 +38,16 @@ EchoMuse client.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Faults with the controller or an Echo
 belong in the [main repo](https://github.com/wilbowes/EchoMuse/issues).
+
+## Reference clients
+
+- [Go](clients/go/README.md) — protocol client, device packages and emulator.
+  The emulator demonstrates controller streamed listening, which does not
+  meet this repository's private-listening requirement. It is a development
+  tool, not a conforming client. The library's conformance status is pending
+  the suite. Read the [Go SDK guide](docs/sdk.md),
+  [emulator instructions](docs/emulator.md), and
+  [security notes](docs/security.md).
 
 ## Licence
 

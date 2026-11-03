@@ -10,6 +10,33 @@ permissions:
   contents: read
 
 jobs:
+  go-client:
+    name: Go reference client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: clients/go/go.mod
+          cache-dependency-path: clients/go/go.sum
+      - name: Run Go tests
+        working-directory: clients/go
+        run: go test -race ./...
+      - name: go vet
+        working-directory: clients/go
+        run: go vet ./...
+      - name: Check gofmt
+        working-directory: clients/go
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
   workflow-hygiene:
     name: Workflow hygiene
     runs-on: ubuntu-24.04
