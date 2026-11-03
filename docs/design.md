@@ -157,12 +157,9 @@ the same dark inset LCD readouts, the same colours for the device states.
 An emulator that looked like a different product would be harder to trust
 than one that looks like the thing it stands in for.
 
-### It uses ffmpeg for the audio
+### It uses ALSA for audio
 
-ffmpeg reaches ALSA, PulseAudio and PipeWire with one command line, and it
-is nearly always already installed. It is the emulator's dependency, not
-the SDK's, and the emulator's `AudioBackend` interface is there for a
-machine ffmpeg does not know about.
+The emulator command supplies its Linux ALSA adapter, while the SDK exposes a system-neutral audio backend contract that applications can implement for their platform. The browser offers live device selection through that optional contract. Sendspin uses the same playback stream as voice responses so it cannot reserve a second handle to the speaker.
 
 ### The approval is not the emulator's to make
 

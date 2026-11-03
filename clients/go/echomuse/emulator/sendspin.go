@@ -54,8 +54,8 @@ func (e *Emulator) applySendspinConfig(cfg protocol.Config) {
 			StorePath: filepath.Join(e.opts.CredentialsDir, sendspinStoreName),
 			Name:      name, Instance: instance, Product: "EchoMuse Emulator", Version: "0.1.0",
 			Unpaired: unpaired,
-			// ffplay is a generic output backend; keep its advertised start and
-			// jitter buffers small so it does not add seconds of group latency.
+			// Shared ALSA output uses a modest lead to keep startup responsive;
+			// keep jitter buffers small so it does not add seconds of latency.
 			RequiredLeadTime: 250 * time.Millisecond,
 			MinBuffer:        150 * time.Millisecond,
 		})
@@ -120,9 +120,8 @@ func (e *Emulator) sendSendspinToken() {
 	}
 }
 
-// sendspinPump feeds clocked periods to Linux ALSA when cgo is enabled. The
-// measured queue depth lets Fill align each period to the DAC. Other platforms
-// fall back to ffplay, which can only estimate the output lead.
+// sendspinPump feeds Sendspin periods to the same playback stream used by
+// voice responses unless an application provides a clocked output backend.
 func (e *Emulator) sendspinPump(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -160,9 +159,9 @@ func (e *Emulator) sendspinPump(ctx context.Context) {
 			e.mu.Unlock()
 			if openClocked {
 				var err error
-				clocked, err = e.sendspinOutput.OpenSendspinOutput(ctx, 48000, 2)
+				clocked, err = e.sendspinOutput.OpenClockedOutput(ctx, 48000, 2)
 				if err != nil {
-					e.log.Warn("clocked Sendspin output unavailable; using ffplay", "error", err)
+					e.log.Warn("clocked Sendspin output unavailable; using shared audio output", "error", err)
 					e.mu.Lock()
 					e.sendspinOutput = nil
 					e.mu.Unlock()

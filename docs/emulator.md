@@ -9,8 +9,8 @@ repository's private-listening requirement and is not a conforming client.
 ## Requirements
 
 - Go 1.24 or later.
-- `ffmpeg` and `ffplay` installed and available on `PATH` for microphone and
-  speaker I/O.
+- Linux with cgo enabled and the ALSA runtime library (`libasound.so.2`) for
+  microphone and speaker I/O.
 - A POSIX `/bin/sh`, which the default shell plane uses for controller
   credential transfer.
 - A reachable EchoMuse controller. mDNS discovery requires the computer and
@@ -50,7 +50,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dist/echomuse-emulator-linux-a
 ```
 
 For 32-bit Raspberry Pi OS, use `GOARCH=arm GOARM=7` on ARMv7 hardware. Copy
-the executable to the target; install `ffmpeg` there separately for audio.
+the executable to the target; install ALSA runtime support there for audio.
 
 ## Local wakeword scoring
 
@@ -86,16 +86,13 @@ token requests. The identity and pairing records are stored in
 mode requires pairing. Keep TCP port 8928 reachable from the controller and
 Music Assistant only on the intended LAN.
 
-On Linux with cgo enabled, the emulator uses ALSA directly for Sendspin and
-measures queued frames before each write. It uses ffplay for voice audio. This
-lets the player schedule Sendspin samples against the host audio clock instead
-of guessing its output position. The emulator advertises a 250ms required start
-lead and 150ms minimum buffer to avoid multi-second startup delay. If ALSA is
-unavailable, Sendspin falls back to ffplay with an estimated 80ms output lead;
-that fallback cannot guarantee tight synchronization with an Echo. The core
-player exposes `Fill` for other hardware backends that can report DAC timing.
-A Linux cgo build requires a C compiler and the `libasound.so.2` runtime library;
-`CGO_ENABLED=0` uses the ffplay fallback.
+The command's ALSA adapter handles voice capture and playback. The browser can
+switch microphones and speakers while it is running. Sendspin uses the same
+playback backend as voice by default, so it does not open a second handle that
+can reserve the speaker. Applications that can report DAC timing may inject an
+optional clocked output backend. A Linux cgo build requires a C compiler and
+the `libasound.so.2` runtime library; `CGO_ENABLED=0` does not provide audio
+I/O.
 
 To run without audio capture or without the browser UI:
 
@@ -129,7 +126,7 @@ List devices first if the default audio devices are wrong:
 
 ```bash
 go run ./cmd/emulator --list-audio-devices
-go run ./cmd/emulator --audio-input alsa:hw:2,6 --audio-output pulse:alsa_output.example
+go run ./cmd/emulator --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
 ```
 
 The UI exposes device state and a button endpoint without authentication. Keep
@@ -219,13 +216,10 @@ Real. The microphone is the machine's microphone and the speaker is the
 machine's speaker, so a voice turn through Home Assistant works end to
 end.
 
-It goes through **ffmpeg**, which reaches ALSA, PulseAudio and PipeWire
-with one command line and is nearly always already installed. It is the
-emulator's dependency, not the SDK's.
+The emulator command supplies a Linux ALSA adapter for voice capture and playback. The SDK exposes a system-neutral audio backend interface, so other applications can supply their own audio system. The browser lets you switch ALSA microphones and speakers live; device names are shown in full. Sendspin shares the same speaker stream so it does not hold the device separately from voice audio.
 
 The rates are the protocol's, and they differ: **capture is 16 kHz** and
-**playback is 48 kHz**, both signed 16-bit little-endian mono. ffmpeg does
-the conversion.
+**playback is 48 kHz**, both signed 16-bit little-endian mono. ALSA plug devices handle format conversion.
 
 `--mute-capture` runs the flow without sending the microphone to the
 controller, which is what to use in a room where the sound should not
@@ -264,12 +258,9 @@ written `server:name`. The server is the part that matters:
 | Name | Reaches |
 |---|---|
 | `alsa:hw:2,0` | An ALSA card and device, by number |
-| `pulse:alsa_output.usb-Generic_USB_Audio-00.analog-stereo` | A PulseAudio or PipeWire device, by name |
 | `default` | The system default for that direction |
 
-A name with no server is read as a PulseAudio device when the machine has
-one — because that is how the machine's own mixer names its devices — and
-as an ALSA device otherwise.
+Device names are ALSA PCM names. The browser shows the full card and device descriptions alongside each name.
 
 The **microphone meter** in the window's footer answers the question this
 exists for: is the microphone open, and is it hearing anything. A bar that
@@ -289,15 +280,15 @@ put a control on the dashboard that does nothing.
 
 ## Using it as a library
 
-The emulator is a package, not only a command. An application that wants a
-device with a window can use the parts:
+The emulator package is separate from its Linux ALSA adapter. Applications
+can provide any implementation of the SDK audio contract:
 
 ```go
 emu, err := emulator.New(emulator.Options{
 	ControllerURL:  "ws://192.168.1.10:8767",
 	DeviceID:       "my-device",
 	CredentialsDir: "/var/lib/echomuse",
-	Audio:          emulator.NewFFmpegBackend("", ""),
+	Audio:          audio.NewBackend("", ""),
 })
 
 // The window's handler, for a server of your own.
@@ -306,9 +297,9 @@ http.Handle("/", emulator.NewHandler(emu))
 
 The pieces it is made of are separable:
 
-- `emulator.AudioBackend` — how the sound card is reached. The ffmpeg one
-  is the default; a machine with a driver ffmpeg does not know about
-  supplies its own.
+- `echomuse.AudioBackend` — the system-neutral PCM contract. The command
+  supplies an ALSA adapter; applications can inject an implementation for
+  their own operating system and audio stack.
 - `echomuse.Device` — the client underneath. Everything the emulator does
   is available without it.
 - `display.Tracker` — the ring, as values.

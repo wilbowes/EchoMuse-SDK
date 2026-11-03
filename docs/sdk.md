@@ -13,7 +13,7 @@ The module is `github.com/wilbowes/EchoMuse-SDK/clients/go` and requires Go
 
 | Package | Role |
 |---|---|
-| `echomuse` | Connection lifecycle, registration, callbacks, outbound messages, shell plane and credentials. |
+| `echomuse` | Connection lifecycle, registration, callbacks, outbound messages, shell plane, credentials and system-neutral audio plugin contracts. |
 | `echomuse/protocol` | JSON messages, capability names, configuration types and binary frame encoders. |
 | `echomuse/state` | Thread-safe snapshots of device and link state. |
 | `echomuse/display` | Converts ring frames into values a screen can render. |
@@ -21,7 +21,7 @@ The module is `github.com/wilbowes/EchoMuse-SDK/clients/go` and requires Go
 | `echomuse/wakeword` | Pure-Go buffering and feature pipeline around an application supplied inference backend. |
 | `echomuse/wakeword/ort` | Optional Linux+cgo ONNX Runtime backend for the openWakeWord feature models and classifier. |
 | `echomuse/sendspin` | Full Sendspin network player: discovery, pairing, Noise encryption, time sync, FLAC decoding, buffering and playback clock. |
-| `echomuse/emulator` | Emulator lifecycle, audio interfaces, device discovery and browser UI. |
+| `echomuse/emulator` | Emulator lifecycle and browser UI, built on the SDK contracts. |
 | `echomuse/mockcontroller` | A controller fixture used by SDK tests and local development. |
 
 The emulator command lives in `cmd/emulator`.
@@ -186,5 +186,6 @@ go vet ./...
 
 The SDK's core, Sendspin player and emulator build without cgo. The optional
 `wakeword/ort` package uses cgo and a target-matched `libonnxruntime.so`. The
-emulator also needs `ffmpeg` and `ffplay` on `PATH`. See
+emulator command supplies a Linux ALSA adapter and requires cgo plus
+`libasound.so.2`; the SDK itself does not depend on ALSA. See
 [run the emulator](emulator.md).

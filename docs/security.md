@@ -50,8 +50,7 @@ Keep the listener on loopback. If remote access is needed, restrict network
 access to an authenticated reverse proxy and prevent peers from reaching the
 emulator port directly; the emulator itself has no UI authentication.
 
-The emulator launches `ffmpeg` and `ffplay` using argument arrays rather than
-a shell command, and stops the processes when capture/playback ends. The audio
+The emulator opens ALSA audio devices directly and closes the streams when capture or playback ends. The audio
 it captures is forwarded to the configured controller in stream mode. Do not
 run it where that behavior is inappropriate.
 

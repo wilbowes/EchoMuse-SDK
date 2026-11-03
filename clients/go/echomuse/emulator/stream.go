@@ -198,9 +198,7 @@ func (h *captureHandle) Close() {
 // captureReason says why the microphone stopped, as the audio backend
 // knows it.
 //
-// The backend's reason is the one that says what to fix: ffmpeg reports
-// "cannot open audio device" or "Device or resource busy", where the
-// read's own error says only that the stream ended.
+// The backend reports ALSA's device error, which identifies the cause more clearly than the stream read error.
 func (e *Emulator) captureReason() string {
 	reporter, ok := e.audio.(FailureReporter)
 	if !ok {

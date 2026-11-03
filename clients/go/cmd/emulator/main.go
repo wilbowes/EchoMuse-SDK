@@ -27,9 +27,8 @@
 //
 // # The microphone
 //
-// The microphone is captured through ffmpeg, which reaches ALSA, PulseAudio
-// and PipeWire with one command line. It is the emulator's dependency, not
-// the emulator's: the core SDK is pure Go, with ONNX Runtime isolated behind
+// Voice audio uses ALSA directly on Linux. It is the emulator's dependency,
+// not the SDK's: the core SDK is pure Go, with ONNX Runtime isolated behind
 // an optional Linux+cgo package.
 //
 // By default the emulator streams only after the controller asks for the
@@ -53,6 +52,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/cmd/emulator/audio"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/emulator"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword/ort"
 )
@@ -134,7 +134,7 @@ func main() {
 		ControllerTLSPort: *tlsPort,
 		DeviceID:          *deviceID,
 		CredentialsDir:    *credsDir,
-		Audio:             emulator.NewFFmpegBackend(*audioInput, *audioOutput),
+		Audio:             audio.NewBackend(*audioInput, *audioOutput),
 		MuteCapture:       *muteCapture,
 		LocalWake:         localWake,
 		Log:               log,
@@ -174,7 +174,7 @@ func main() {
 // --audio-output. The names are the ones the machine's own mixer shows,
 // so a name copied from there works.
 func printAudioDevices() {
-	inputs, outputs, err := emulator.ListDevices()
+	inputs, outputs, err := audio.ListDevices()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "the audio devices could not be listed: %v\n", err)
 		os.Exit(1)
@@ -202,7 +202,7 @@ func printAudioDevices() {
 //
 // The system default is marked, because it is the one most machines want
 // and the one the emulator takes when nothing is chosen.
-func printDevices(devices []emulator.Device) {
+func printDevices(devices []emulator.AudioDevice) {
 	for _, d := range devices {
 		marker := ""
 		if d.Default {

@@ -124,10 +124,7 @@ func New(opts Options) (*Emulator, error) {
 		opts.CredentialsDir = filepath.Join(userHome(), ".echomuse", "emulator")
 	}
 	if opts.Audio == nil {
-		opts.Audio = NewFFmpegBackend("", "")
-	}
-	if opts.SendspinOutput == nil {
-		opts.SendspinOutput = defaultSendspinOutputBackend()
+		return nil, fmt.Errorf("emulator: Audio backend is required; provide a system-specific implementation")
 	}
 	if opts.LocalWake != nil {
 		if opts.LocalWake.Inferer == nil {
@@ -310,6 +307,27 @@ func (e *Emulator) SetMuted(muted bool) error {
 	return e.device.SendMuteState(muted)
 }
 
+// SelectAudioDevices asks the injected backend to switch voice endpoints.
+func (e *Emulator) SelectAudioDevices(input, output string) error {
+	backend, ok := e.audio.(AudioDeviceProvider)
+	if !ok {
+		return fmt.Errorf("audio backend does not support device selection")
+	}
+	e.mu.Lock()
+	wasCapturing := e.capturing
+	ctx := e.ctx
+	e.mu.Unlock()
+	if err := backend.SelectAudioDevices(input, output); err != nil {
+		return err
+	}
+	e.StopCapture()
+	e.StopPlayback()
+	if wasCapturing && ctx != nil {
+		e.StartCapture(ctx)
+	}
+	return nil
+}
+
 // Ring returns the ring tracker, for a window that draws the ring.
 func (e *Emulator) Ring() *display.Tracker { return e.ring }
 
@@ -472,9 +490,7 @@ func (e *Emulator) play(pcm []byte) {
 // speakerReason says why the speaker failed, as the audio backend knows
 // it.
 //
-// The backend's reason is the one that says what to fix: ffmpeg reports
-// "cannot set channel count to 1" or "Device or resource busy", where the
-// write's own error says only that the pipe broke.
+// The backend reports ALSA's device error, which identifies the cause more clearly than the stream write error.
 func (e *Emulator) speakerReason() string {
 	reporter, ok := e.audio.(FailureReporter)
 	if !ok {

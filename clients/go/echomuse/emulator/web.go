@@ -53,7 +53,11 @@ type view struct {
 	// DeviceID is this device's identity.
 	DeviceID string `json:"device_id"`
 	// ControllerURL is the controller it is joining.
-	ControllerURL string `json:"controller_url"`
+	ControllerURL  string        `json:"controller_url"`
+	Inputs         []AudioDevice `json:"inputs"`
+	Outputs        []AudioDevice `json:"outputs"`
+	SelectedInput  string        `json:"selected_input"`
+	SelectedOutput string        `json:"selected_output"`
 }
 
 // ledView is one indicator's colour.
@@ -65,18 +69,25 @@ type ledView struct {
 
 // server serves the window.
 type server struct {
-	emu *Emulator
-	mux *http.ServeMux
+	emu     *Emulator
+	mux     *http.ServeMux
+	inputs  []AudioDevice
+	outputs []AudioDevice
 }
 
 // newServer returns the window's server.
 func newServer(emu *Emulator) *server {
-	s := &server{emu: emu, mux: http.NewServeMux()}
+	var inputs, outputs []AudioDevice
+	if provider, ok := emu.audio.(AudioDeviceProvider); ok {
+		inputs, outputs, _ = provider.AudioDevices()
+	}
+	s := &server{emu: emu, mux: http.NewServeMux(), inputs: inputs, outputs: outputs}
 	s.mux.HandleFunc("/", s.handlePage)
 	s.mux.HandleFunc("/api/state", s.handleState)
 	s.mux.HandleFunc("/api/tap", s.handleTap)
 	s.mux.HandleFunc("/api/volume", s.handleVolume)
 	s.mux.HandleFunc("/api/mute", s.handleMute)
+	s.mux.HandleFunc("/api/audio-devices", s.handleAudioDevices)
 	return s
 }
 
@@ -132,6 +143,10 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 		DeviceID:      s.emu.opts.DeviceID,
 		ControllerURL: s.emu.opts.ControllerURL,
 	}
+	v.Inputs, v.Outputs = s.inputs, s.outputs
+	if selected, ok := s.emu.audio.(AudioDeviceProvider); ok {
+		v.SelectedInput, v.SelectedOutput = selected.SelectedAudioDevices()
+	}
 	if player != nil {
 		v.Sendspin = player.Status()
 	}
@@ -144,6 +159,33 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	json.NewEncoder(w).Encode(v)
+}
+
+func (s *server) handleAudioDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !sameOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Input  string `json:"input"`
+		Output string `json:"output"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2048)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil || body.Input == "" || body.Output == "" {
+		http.Error(w, "invalid audio device selection", http.StatusBadRequest)
+		return
+	}
+	if err := s.emu.SelectAudioDevices(body.Input, body.Output); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeOK(w)
 }
 
 // handleTap reports a press of the action button.
@@ -462,6 +504,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!DOCTYPE html>
 
         <button class="primary" id="tap">Press the action button</button>
         <div class="notice" style="margin-top:14px">
+          <label for="mic-device">Microphone</label><br />
+          <select id="mic-device"></select><br />
+          <label for="speaker-device">Speaker</label><br />
+          <select id="speaker-device"></select><br />
           <label for="volume">Speaker volume <span id="volume-label">50%</span></label><br />
           <input id="volume" type="range" min="0" max="100" value="50" />
           <button id="mute" type="button">Mute microphone</button>
@@ -495,6 +541,20 @@ const micLabelEl = document.getElementById('mic-label');
 const volumeEl = document.getElementById('volume');
 const volumeLabelEl = document.getElementById('volume-label');
 const muteEl = document.getElementById('mute');
+const inputDeviceEl = document.getElementById('mic-device');
+const outputDeviceEl = document.getElementById('speaker-device');
+
+function updateDeviceSelect(el, devices, selected) {
+  const signature = JSON.stringify([devices, selected]);
+  if (el.dataset.signature === signature) return;
+  el.dataset.signature = signature;
+  el.replaceChildren();
+  for (const d of devices || []) {
+    const option = document.createElement('option'); option.value = d.name;
+    option.textContent = d.description && d.description !== d.name ? d.description + ' — ' + d.name : d.name; option.title = d.name;
+    option.selected = d.name === selected; el.appendChild(option);
+  }
+}
 
 const LED_COUNT = 12;
 const leds = [];
@@ -600,6 +660,8 @@ function refresh() {  fetch('/api/state')
       phaseEl.textContent = v.phase || 'Unknown';
       deviceIdEl.textContent = v.device_id;
       audioEl.textContent = 'audio: ' + v.audio;
+      updateDeviceSelect(inputDeviceEl, v.inputs, v.selected_input);
+      updateDeviceSelect(outputDeviceEl, v.outputs, v.selected_output);
       controllerEl.textContent = 'controller: ' + (v.controller_url || 'mDNS');
       paintMic(v);
       paintLeds(v.leds || [], v.pattern, v.listening);
@@ -629,6 +691,12 @@ muteEl.addEventListener('click', () => {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({muted:!v.muted})
   }));
 });
+function selectDevices() {
+  fetch('/api/audio-devices', { method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({input:inputDeviceEl.value, output:outputDeviceEl.value}) });
+}
+inputDeviceEl.addEventListener('change', selectDevices);
+outputDeviceEl.addEventListener('change', selectDevices);
 
 refresh();
 setInterval(refresh, 250);
