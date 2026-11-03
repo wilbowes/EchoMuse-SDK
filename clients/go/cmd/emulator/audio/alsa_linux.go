@@ -20,6 +20,7 @@ typedef struct {
     long (*readi_fn)(void *, void *, unsigned long);
     int (*delay_fn)(void *, long *);
     int (*recover_fn)(void *, int, int);
+    int (*drain_fn)(void *);
     int (*drop_fn)(void *);
     int (*close_fn)(void *);
 } em_alsa;
@@ -35,6 +36,7 @@ static int em_alsa_open(em_alsa *a, const char *device, int stream, unsigned int
     LOAD("snd_pcm_readi", readi_fn);
     LOAD("snd_pcm_delay", delay_fn);
     LOAD("snd_pcm_recover", recover_fn);
+    LOAD("snd_pcm_drain", drain_fn);
     LOAD("snd_pcm_drop", drop_fn);
     LOAD("snd_pcm_close", close_fn);
 #undef LOAD
@@ -66,6 +68,7 @@ static long em_alsa_read(em_alsa *a, void *data, unsigned long frames) {
 static int em_alsa_recover(em_alsa *a, int err) {
     return a->recover_fn(a->pcm, err, 1);
 }
+static int em_alsa_drain(em_alsa *a) { return a->drain_fn(a->pcm); }
 
 static void em_alsa_close(em_alsa *a) {
     if (a->pcm) {
@@ -88,6 +91,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse"
@@ -97,6 +101,7 @@ import (
 // alsaBackend uses ALSA directly for both directions of voice audio.
 var _ echomuse.AudioBackend = (*alsaBackend)(nil)
 var _ echomuse.AudioDeviceProvider = (*alsaBackend)(nil)
+var _ echomuse.ClockedAudioBackend = (*alsaBackend)(nil)
 
 type alsaBackend struct {
 	mu            sync.RWMutex
@@ -200,6 +205,89 @@ func (b *alsaBackend) Playback(ctx context.Context, rate int) (io.WriteCloser, e
 	return &alsaPlayback{ctx: ctx, handle: h}, nil
 }
 
+func (b *alsaBackend) OpenClockedOutput(ctx context.Context, rate, channels int) (echomuse.ClockedAudioOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b.mu.RLock()
+	device := b.output
+	b.mu.RUnlock()
+	h, err := openALSA(device, 0, rate, channels)
+	if err != nil {
+		b.setError(err)
+		return nil, err
+	}
+	return &alsaClockedOutput{ctx: ctx, handle: h, rate: rate, channels: channels}, nil
+}
+
+type alsaClockedOutput struct {
+	ctx            context.Context
+	handle         C.em_alsa
+	rate, channels int
+	mu             sync.Mutex
+	closed         bool
+}
+
+func (o *alsaClockedOutput) NextPlaybackTime() (time.Time, time.Duration, error) {
+	if err := o.ctx.Err(); err != nil {
+		return time.Time{}, 0, err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return time.Time{}, 0, io.ErrClosedPipe
+	}
+	var code C.int
+	frames := C.em_alsa_delay(&o.handle, &code)
+	if code < 0 {
+		return time.Time{}, 0, alsaError(int(code))
+	}
+	if frames < 0 {
+		frames = 0
+	}
+	return time.Now().Add(time.Duration(frames) * time.Second / time.Duration(o.rate)), 250 * time.Microsecond, nil
+}
+
+func (o *alsaClockedOutput) Write(p []byte) (int, error) {
+	frameBytes := o.channels * 2
+	if len(p)%frameBytes != 0 {
+		return 0, fmt.Errorf("ALSA clocked output: %d bytes is not a whole audio frame", len(p))
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return 0, io.ErrClosedPipe
+	}
+	written := 0
+	for written < len(p) {
+		if err := o.ctx.Err(); err != nil {
+			return written, err
+		}
+		frames := C.em_alsa_write(&o.handle, unsafe.Pointer(&p[written]), C.ulong((len(p)-written)/frameBytes))
+		if frames < 0 {
+			if rc := C.em_alsa_recover(&o.handle, C.int(frames)); rc < 0 {
+				return written, alsaError(int(rc))
+			}
+			continue
+		}
+		if frames == 0 {
+			continue
+		}
+		written += int(frames) * frameBytes
+	}
+	return written, nil
+}
+
+func (o *alsaClockedOutput) Close() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.closed {
+		C.em_alsa_close(&o.handle)
+		o.closed = true
+	}
+	return nil
+}
+
 type alsaCapture struct {
 	ctx    context.Context
 	handle C.em_alsa
@@ -279,6 +367,19 @@ func (w *alsaPlayback) Close() error {
 	if !w.closed {
 		C.em_alsa_close(&w.handle)
 		w.closed = true
+	}
+	return nil
+}
+
+// Drain waits until ALSA has played every frame queued before the response EOS.
+func (w *alsaPlayback) Drain() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	if rc := C.em_alsa_drain(&w.handle); rc < 0 {
+		return alsaError(int(rc))
 	}
 	return nil
 }

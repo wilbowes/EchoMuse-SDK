@@ -77,9 +77,15 @@ type Emulator struct {
 	sendspinName        string
 	sendspinUnpaired    bool
 	sendspinMuted       bool
-	sendspinExternal    bool
+	voiceActive         bool
+	voiceMixed          bool
 	lastSendspinAttempt time.Time
 	lastClockedAttempt  time.Time
+	duckDB              float64
+	musicDucked         bool
+	voiceMixMu          sync.Mutex
+	voiceMixCond        *sync.Cond
+	voiceMix            []byte
 	phase               string
 	phaseMsg            string
 	steps               []Step
@@ -126,6 +132,11 @@ func New(opts Options) (*Emulator, error) {
 	if opts.Audio == nil {
 		return nil, fmt.Errorf("emulator: Audio backend is required; provide a system-specific implementation")
 	}
+	if opts.SendspinOutput == nil {
+		if clocked, ok := opts.Audio.(SendspinOutputBackend); ok {
+			opts.SendspinOutput = clocked
+		}
+	}
 	if opts.LocalWake != nil {
 		if opts.LocalWake.Inferer == nil {
 			return nil, fmt.Errorf("emulator: LocalWake requires an inference backend")
@@ -142,8 +153,10 @@ func New(opts Options) (*Emulator, error) {
 		audio:          opts.Audio,
 		sendspinOutput: opts.SendspinOutput,
 		volume:         50,
+		duckDB:         -18,
 		localWake:      opts.LocalWake,
 	}
+	e.voiceMixCond = sync.NewCond(&e.voiceMixMu)
 	if opts.LocalWake != nil {
 		threshold := opts.LocalWake.Threshold
 		if threshold <= 0 {
@@ -177,14 +190,34 @@ func New(opts Options) (*Emulator, error) {
 	device.OnLEDs(e.ring.OnLEDs)
 	device.OnLEDAnim(e.ring.OnLEDAnim)
 	device.OnSpeaker(func(pcm []byte) {
-		e.setSendspinExternal(true)
+		e.setVoiceActive(true)
 		e.StartPlayback(e.ctx)
 		e.play(pcm)
 	})
 	device.OnSpeakerEOS(func() {
 		e.log.Debug("the response finished")
-		e.setSendspinExternal(false)
-		e.StopPlayback()
+		e.finishSpeakerResponse()
+		e.setVoiceActive(false)
+	})
+	device.OnDuck(func(on bool) {
+		e.mu.Lock()
+		e.musicDucked = on
+		duckDB := e.duckDB
+		e.mu.Unlock()
+		e.log.Info("Sendspin music duck state changed", "on", on, "duck_db", duckDB)
+	})
+	device.OnFlush(func(kind string) {
+		if kind != "speaker" {
+			return
+		}
+		e.clearVoiceMix()
+		e.setVoiceActive(false)
+		e.mu.Lock()
+		hasMusic := e.sendspin != nil && e.sendspin.Active()
+		e.mu.Unlock()
+		if !hasMusic {
+			e.StopPlayback()
+		}
 	})
 	device.OnMicStart(func(lockMic bool) {
 		e.mu.Lock()
@@ -215,6 +248,11 @@ func New(opts Options) (*Emulator, error) {
 		e.log.Info("the controller pushed a configuration", "model", c.OwwModel)
 		if c.StartupVolume != nil {
 			e.setVolume(*c.StartupVolume)
+		}
+		if c.DuckDb != nil {
+			e.mu.Lock()
+			e.duckDB = *c.DuckDb
+			e.mu.Unlock()
 		}
 		e.applyWakeConfig(c)
 		e.applySendspinConfig(c)
@@ -320,6 +358,7 @@ func (e *Emulator) SelectAudioDevices(input, output string) error {
 	if err := backend.SelectAudioDevices(input, output); err != nil {
 		return err
 	}
+	e.closeSendspinOutput()
 	e.StopCapture()
 	e.StopPlayback()
 	if wasCapturing && ctx != nil {
@@ -474,11 +513,18 @@ func (e *Emulator) play(pcm []byte) {
 	volume := e.volume
 	e.mu.Unlock()
 
-	if speaker == nil {
-		return
-	}
 	if volume < 100 {
 		pcm = applyVolume(pcm, volume)
+	}
+	e.mu.Lock()
+	mixWithMusic := e.voiceActive && e.voiceMixed
+	e.mu.Unlock()
+	if mixWithMusic {
+		e.queueVoiceMix(pcm)
+		return
+	}
+	if speaker == nil {
+		return
 	}
 	if _, err := speaker.Write(pcm); err != nil {
 		e.log.Warn("the speaker did not take the audio", "error", err)

@@ -427,7 +427,9 @@ func (d *Device) handleControl(p *plane, raw []byte) {
 		d.emitVolumeSet(m.Level)
 	case protocol.TypeDuck:
 		var m protocol.Duck
-		d.emitDuck(m.On)
+		if json.Unmarshal(raw, &m) == nil {
+			d.emitDuck(m.On)
+		}
 	case protocol.TypePlayCue:
 		var m protocol.PlayCue
 		d.emitCue(m.Cue)

@@ -15,6 +15,10 @@ type AudioBackend interface {
 	Describe() string
 }
 
+// PlaybackDrainer is optionally implemented by a backend whose Close method
+// discards queued audio. Drain waits until already-written audio has played.
+type PlaybackDrainer interface{ Drain() error }
+
 // AudioFailureReporter optionally exposes the last underlying device error.
 type AudioFailureReporter interface{ LastError() string }
 

@@ -3,6 +3,7 @@ package emulator
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -135,21 +136,29 @@ func (e *Emulator) sendspinPump(ctx context.Context) {
 		case <-ticker.C:
 		}
 		e.mu.Lock()
-		c, external, muted, volume := e.sendspin, e.sendspinExternal, e.sendspinMuted, e.volume
+		c, voiceActive, muted, volume := e.sendspin, e.voiceActive, e.sendspinMuted, e.volume
+		ducked, duckDB := e.musicDucked, e.duckDB
 		speaker := e.speaker
 		openAudio := speaker == nil && time.Since(e.lastSendspinAttempt) >= time.Second
 		if openAudio {
 			e.lastSendspinAttempt = time.Now()
 		}
 		e.mu.Unlock()
-		if c == nil || !c.Active() || external {
+		if voiceActive && e.voiceMixAvailable() && speaker == nil {
+			e.StartPlayback(ctx)
+			e.mu.Lock()
+			speaker = e.speaker
+			e.mu.Unlock()
+		}
+		musicReady := c != nil && c.Active()
+		if !musicReady && !(voiceActive && e.voiceMixAvailable()) {
 			e.closeSendspinOutput()
-			if !external {
+			if !voiceActive {
 				e.StopPlayback()
 			}
 			continue
 		}
-		if e.sendspinOutput != nil {
+		if e.sendspinOutput != nil && c != nil {
 			e.mu.Lock()
 			clocked := e.sendspinOut
 			openClocked := clocked == nil && time.Since(e.lastClockedAttempt) >= time.Second
@@ -177,7 +186,10 @@ func (e *Emulator) sendspinPump(ctx context.Context) {
 				if err == nil {
 					clear(stereo)
 					c.Fill(stereo, playAt, uncertainty)
-					applySendspinGain(stereo, volume, muted)
+					applySendspinGain(stereo, volume, muted, ducked, duckDB)
+					if voiceActive && e.voiceMixAvailable() {
+						e.mixVoiceIntoStereo(stereo)
+					}
 					if _, err = clocked.Write(stereo); err != nil {
 						e.log.Warn("clocked Sendspin output write failed", "error", err)
 						e.closeSendspinOutput()
@@ -197,14 +209,21 @@ func (e *Emulator) sendspinPump(ctx context.Context) {
 		if speaker == nil {
 			continue
 		}
-		clear(stereo)
-		c.Fill(stereo, time.Now().Add(80*time.Millisecond), 2*time.Millisecond)
-		applySendspinGain(stereo, volume, muted)
-		for i := 0; i+3 < len(stereo); i += 4 {
-			left := int32(int16(uint16(stereo[i]) | uint16(stereo[i+1])<<8))
-			right := int32(int16(uint16(stereo[i+2]) | uint16(stereo[i+3])<<8))
-			v := (left + right) / 2
-			mono[i/2], mono[i/2+1] = byte(v), byte(uint16(v)>>8)
+		if musicReady {
+			clear(stereo)
+			c.Fill(stereo, time.Now().Add(80*time.Millisecond), 2*time.Millisecond)
+			applySendspinGain(stereo, volume, muted, ducked, duckDB)
+			for i := 0; i+3 < len(stereo); i += 4 {
+				left := int32(int16(uint16(stereo[i]) | uint16(stereo[i+1])<<8))
+				right := int32(int16(uint16(stereo[i+2]) | uint16(stereo[i+3])<<8))
+				v := (left + right) / 2
+				mono[i/2], mono[i/2+1] = byte(v), byte(uint16(v)>>8)
+			}
+		} else {
+			clear(mono)
+		}
+		if voiceActive && e.voiceMixAvailable() {
+			e.mixVoiceInto(mono)
 		}
 		if _, err := speaker.Write(mono); err != nil {
 			e.log.Warn("the speaker missed a Sendspin period", "error", err)
@@ -212,15 +231,21 @@ func (e *Emulator) sendspinPump(ctx context.Context) {
 	}
 }
 
-func (e *Emulator) setSendspinExternal(busy bool) {
+func (e *Emulator) setVoiceActive(busy bool) {
 	e.mu.Lock()
-	e.sendspinExternal = busy
-	c := e.sendspin
-	e.mu.Unlock()
-	if c != nil {
-		c.SetExternal(busy)
+	if busy {
+		if !e.voiceActive {
+			e.voiceMixed = e.sendspin != nil && e.sendspin.Active()
+		}
+		e.voiceActive = true
+	} else {
+		e.voiceActive = false
+		e.voiceMixed = false
 	}
+	e.mu.Unlock()
 }
+
+func (e *Emulator) voiceMixAvailable() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.voiceMixed }
 
 func (e *Emulator) closeSendspinOutput() {
 	e.mu.Lock()
@@ -239,15 +264,63 @@ func (e *Emulator) disableClockedSendspinOutput() {
 	e.mu.Unlock()
 }
 
-func applySendspinGain(pcm []byte, volume int, muted bool) {
+func applySendspinGain(pcm []byte, volume int, muted, ducked bool, duckDB float64) {
+	duckGain := 1.0
+	if ducked {
+		duckGain = math.Pow(10, duckDB/20)
+	}
 	for i := 0; i+1 < len(pcm); i += 2 {
-		v := int32(int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8))
+		v := float64(int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8))
 		if muted {
 			v = 0
 		} else {
-			v = v * int32(volume) / 100
+			v = v * float64(volume) / 100 * duckGain
 		}
-		pcm[i], pcm[i+1] = byte(v), byte(uint16(v)>>8)
+		if v > 32767 {
+			v = 32767
+		}
+		if v < -32768 {
+			v = -32768
+		}
+		sample := int16(v)
+		pcm[i], pcm[i+1] = byte(sample), byte(uint16(sample)>>8)
+	}
+}
+
+func (e *Emulator) mixVoiceInto(music []byte) {
+	voice := make([]byte, len(music))
+	e.takeVoiceMix(voice)
+	for i := 0; i+1 < len(music); i += 2 {
+		m := int32(int16(uint16(music[i]) | uint16(music[i+1])<<8))
+		v := int32(int16(uint16(voice[i]) | uint16(voice[i+1])<<8))
+		sum := m + v
+		if sum > 32767 {
+			sum = 32767
+		}
+		if sum < -32768 {
+			sum = -32768
+		}
+		sample := int16(sum)
+		music[i], music[i+1] = byte(sample), byte(uint16(sample)>>8)
+	}
+}
+
+func (e *Emulator) mixVoiceIntoStereo(music []byte) {
+	voice := make([]byte, len(music)/2)
+	e.takeVoiceMix(voice)
+	for i := 0; i+3 < len(music); i += 4 {
+		v := int32(int16(uint16(voice[i/2]) | uint16(voice[i/2+1])<<8))
+		for _, j := range []int{i, i + 2} {
+			sum := int32(int16(uint16(music[j])|uint16(music[j+1])<<8)) + v
+			if sum > 32767 {
+				sum = 32767
+			}
+			if sum < -32768 {
+				sum = -32768
+			}
+			sample := int16(sum)
+			music[j], music[j+1] = byte(sample), byte(uint16(sample)>>8)
+		}
 	}
 }
 

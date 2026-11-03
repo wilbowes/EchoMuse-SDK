@@ -258,19 +258,20 @@ func (e *Emulator) StartPlayback(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
-	audio := e.audio
-	e.mu.Unlock()
-
-	writer, err := audio.Playback(ctx, PlaybackRate)
+	if e.voiceMixed && e.sendspinOutput != nil && e.sendspin != nil && e.sendspin.Active() {
+		// The clocked Sendspin output is the shared voice/music mixer.
+		e.mu.Unlock()
+		return
+	}
+	writer, err := e.audio.Playback(ctx, PlaybackRate)
 	if err != nil {
+		e.mu.Unlock()
 		e.log.Error("the speaker could not be opened", "error", err)
 		e.setPhase("Speaker unavailable", err.Error())
 		return
 	}
 
-	handle := &speakerHandle{w: writer}
-	e.mu.Lock()
-	e.speaker = handle
+	e.speaker = &speakerHandle{w: writer}
 	e.mu.Unlock()
 }
 
