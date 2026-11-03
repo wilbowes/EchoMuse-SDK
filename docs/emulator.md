@@ -9,8 +9,8 @@ repository's private-listening requirement and is not a conforming client.
 ## Requirements
 
 - Go 1.24 or later.
-- Linux with cgo enabled and the ALSA runtime library (`libasound.so.2`) for
-  microphone and speaker I/O.
+- Linux with cgo enabled, a C compiler to build, and the ALSA runtime library
+  (`libasound.so.2`) to run microphone and speaker I/O.
 - A POSIX `/bin/sh`, which the default shell plane uses for controller
   credential transfer.
 - A reachable EchoMuse controller. mDNS discovery requires the computer and
@@ -31,8 +31,9 @@ The UI listens on `127.0.0.1:8771` by default and opens in the browser. The
 emulator discovers the controller using mDNS, opens a pairing request, and
 retries while waiting. Approve the device from the controller dashboard. It
 then receives its link credentials over the shell plane and reconnects.
-Use Ctrl+C to stop it. The credential files remain in
-`~/.echomuse/emulator` so later runs can reconnect as the same device.
+Use Ctrl+C to stop it. The profile remains in `~/.echomuse/emulator` so later
+runs can reconnect as the same device. It contains the controller token and CA,
+plus the Sendspin identity and pairing state.
 
 To bypass mDNS, specify the controller URL:
 
@@ -40,8 +41,8 @@ To bypass mDNS, specify the controller URL:
 go run ./cmd/emulator --controller ws://192.168.1.10:8767
 ```
 
-Cross-build the pure-Go command for Linux amd64 and Raspberry Pi arm64 without
-a C toolchain:
+Build a no-audio command for Linux amd64 and Raspberry Pi arm64 without a C
+toolchain:
 
 ```bash
 cd clients/go
@@ -49,8 +50,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/echomuse-emulator-linux-a
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dist/echomuse-emulator-linux-arm64 ./cmd/emulator
 ```
 
-For 32-bit Raspberry Pi OS, use `GOARCH=arm GOARM=7` on ARMv7 hardware. Copy
-the executable to the target; install ALSA runtime support there for audio.
+These builds have no audio backend. For audio on Linux, build with cgo enabled
+and a C compiler:
+
+```bash
+cd clients/go
+CGO_ENABLED=1 go build -o dist/echomuse-emulator-linux ./cmd/emulator
+```
+
+The runtime target also needs `libasound.so.2`. Cross-compiling with audio
+requires a matching C cross-compiler and target sysroot.
 
 ## Local wakeword scoring
 
@@ -87,12 +96,11 @@ mode requires pairing. Keep TCP port 8928 reachable from the controller and
 Music Assistant only on the intended LAN.
 
 The command's ALSA adapter handles voice capture and playback. The browser can
-switch microphones and speakers while it is running. Sendspin uses the same
-playback backend as voice by default, so it does not open a second handle that
-can reserve the speaker. Applications that can report DAC timing may inject an
-optional clocked output backend. A Linux cgo build requires a C compiler and
-the `libasound.so.2` runtime library; `CGO_ENABLED=0` does not provide audio
-I/O.
+switch microphones and speakers while it is running. The adapter supplies
+hardware-clocked output, and the emulator mixes voice into scheduled Sendspin
+periods on that same output. This preserves Sendspin synchronization without
+opening a competing speaker handle. If clocked output is unavailable, the
+emulator falls back to the injected audio backend.
 
 To run without audio capture or without the browser UI:
 
@@ -105,6 +113,20 @@ go run ./cmd/emulator --no-window
 still registers microphone support and may report the controller's stream
 mode; use it as a demo control, not as the private-listening guarantee for a
 real client.
+
+## Reset the local profile
+
+Stop the emulator, then remove its default profile to clear the local
+controller credentials and Sendspin identity/pairing state:
+
+```bash
+rm -rf ~/.echomuse/emulator
+```
+
+If you used `--credentials DIR`, remove that directory instead. This clears
+local state only; the controller may still retain the old device record. Remove
+that record in the controller dashboard, or use a new `--device-id` for a
+separate pending device.
 
 ## Options
 
@@ -216,10 +238,12 @@ Real. The microphone is the machine's microphone and the speaker is the
 machine's speaker, so a voice turn through Home Assistant works end to
 end.
 
-The emulator command supplies a Linux ALSA adapter for voice capture and playback. The SDK exposes a system-neutral audio backend interface, so other applications can supply their own audio system. The browser lets you switch ALSA microphones and speakers live; device names are shown in full. Sendspin shares the same speaker stream so it does not hold the device separately from voice audio.
+The emulator command supplies a Linux ALSA adapter for voice capture and playback. The SDK exposes a system-neutral audio backend interface, so other applications can supply their own audio system. The browser lets you switch ALSA microphones and speakers live; device names are shown in full. The adapter provides hardware-clocked playback, where voice and Sendspin music are mixed through one output handle. The controller's duck level attenuates music under voice.
 
-The rates are the protocol's, and they differ: **capture is 16 kHz** and
-**playback is 48 kHz**, both signed 16-bit little-endian mono. ALSA plug devices handle format conversion.
+Voice audio uses the protocol rates: **capture is 16 kHz** and **playback is
+48 kHz**, signed 16-bit little-endian mono. Sendspin's internal periods are
+48 kHz stereo; voice is mixed into those periods for the clocked output. ALSA
+plug devices handle format conversion.
 
 `--mute-capture` runs the flow without sending the microphone to the
 controller, which is what to use in a room where the sound should not
@@ -237,30 +261,30 @@ go run ./cmd/emulator --list-audio-devices
 
 ```
 Microphones:
-  alsa:hw:00,00	USB
-  alsa:hw:02,06	DMIC
-  alsa:hw:02,07	DMIC16kHz
+  alsa:plughw:0,0	USB Audio (USB controller)
+  alsa:plughw:2,6	DMIC (Built-in Audio)
+  alsa:plughw:2,7	DMIC16kHz (Built-in Audio)
 
 Speakers:
-  alsa:hw:02,00	HDA
-  alsa:hw:02,31	HDA
+  alsa:plughw:2,0	HDA (Built-in Audio)
+  alsa:plughw:2,31	HDA Digital (Built-in Audio)
 ```
 
 The name goes to `--audio-input` or `--audio-output`:
 
 ```bash
-go run ./cmd/emulator --audio-input alsa:hw:02,06 --audio-output alsa:hw:02,00
+go run ./cmd/emulator --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
 ```
 
-A device is named by the server it belongs to and the device within it,
-written `server:name`. The server is the part that matters:
+Each entry has a complete ALSA PCM name and a human-readable description.
+Copy the exact name from the list or select the device from the browser:
 
 | Name | Reaches |
 |---|---|
-| `alsa:hw:2,0` | An ALSA card and device, by number |
+| `alsa:plughw:2,0` | ALSA card 2, device 0, with format conversion |
 | `default` | The system default for that direction |
 
-Device names are ALSA PCM names. The browser shows the full card and device descriptions alongside each name.
+The browser displays each full ALSA PCM name alongside its card and device description.
 
 The **microphone meter** in the window's footer answers the question this
 exists for: is the microphone open, and is it hearing anything. A bar that

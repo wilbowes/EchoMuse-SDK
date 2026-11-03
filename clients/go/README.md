@@ -19,8 +19,9 @@ go vet ./...
 go run ./cmd/emulator
 ```
 
-The emulator uses direct ALSA audio on Linux (with cgo enabled) and a POSIX
-`/bin/sh` for credential transfer. See
+The emulator command uses direct ALSA audio on Linux when built with cgo; a
+no-cgo build has no audio backend. It also uses a POSIX `/bin/sh` for
+credential transfer. See
 [`../../docs/emulator.md`](../../docs/emulator.md) for requirements, options and the
 pairing flow; [`../../docs/sdk.md`](../../docs/sdk.md) for packages and usage; and
 [`../../docs/security.md`](../../docs/security.md) for the trust boundaries. The existing

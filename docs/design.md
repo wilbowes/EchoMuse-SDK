@@ -149,8 +149,10 @@ window uses those and writes its own.
 
 ### Its window is a web page
 
-The emulator uses a web page so the normal build stays portable and needs no
-native window toolkit. Local ONNX inference is an optional Linux+cgo backend.
+The emulator uses a web page and needs no native window toolkit. Its SDK
+packages are system-neutral; the Linux command supplies an ALSA adapter and
+needs cgo for audio. Local ONNX inference is a separate optional Linux+cgo
+backend.
 
 The styling follows the EchoMuse dashboard — the same warm-grey ground,
 the same dark inset LCD readouts, the same colours for the device states.
@@ -159,7 +161,7 @@ than one that looks like the thing it stands in for.
 
 ### It uses ALSA for audio
 
-The emulator command supplies its Linux ALSA adapter, while the SDK exposes a system-neutral audio backend contract that applications can implement for their platform. The browser offers live device selection through that optional contract. Sendspin uses the same playback stream as voice responses so it cannot reserve a second handle to the speaker.
+The emulator command supplies its Linux ALSA adapter, while the SDK exposes a system-neutral audio backend contract that applications can implement for their platform. The browser offers live device selection through that optional contract. When the backend supports clocked output, Sendspin music and voice are mixed into scheduled periods on the same output handle, preserving synchronization without competing for the speaker. Other backends can provide their own output strategy.
 
 ### The approval is not the emulator's to make
 

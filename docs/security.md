@@ -42,22 +42,24 @@ credential directory securely and do not check it into source control.
 
 ## Emulator browser UI
 
-The UI binds to `127.0.0.1:8771` by default. Its state endpoint and button
-endpoint have no login. The button route accepts POST only and rejects a
-provided cross-origin `Origin`. If `--ui` is bound to a non-loopback address,
-any network peer that can reach it can read device state and press the button.
-Keep the listener on loopback. If remote access is needed, restrict network
-access to an authenticated reverse proxy and prevent peers from reaching the
-emulator port directly; the emulator itself has no UI authentication.
+The UI binds to `127.0.0.1:8771` by default. Its state endpoint has no login;
+button, volume, mute, and audio-device selection endpoints accept POST only
+and reject requests with a cross-origin `Origin` header. If `--ui` is bound to a non-loopback
+address, any network peer that can reach it can inspect state, trigger the
+button, change volume/mute, or switch audio devices. Keep the listener on
+loopback. If remote access is needed, restrict network access to an
+authenticated reverse proxy and prevent peers from reaching the emulator port
+directly; the emulator itself has no UI authentication.
 
-The emulator opens ALSA audio devices directly and closes the streams when capture or playback ends. The audio
-it captures is forwarded to the configured controller in stream mode. Do not
-run it where that behavior is inappropriate.
+The emulator's command supplies an ALSA adapter; the SDK does not depend on
+ALSA. The adapter opens devices directly and closes streams when capture or
+playback ends. Captured audio is forwarded to the configured controller in
+stream mode. Do not run it where that behavior is inappropriate.
 
 ## Review status and remaining checks
 
 The current source review checked credential transport and storage, shell
-command construction, audio process invocation, and the local UI routes. It
+command construction, ALSA device access, and the local UI routes. It
 found and addressed mode-string shell injection in `TransferFile`, unsafe
 reuse of a broad mode on an existing token file, delayed UI bind error
 reporting, and method/origin checks for the button route.

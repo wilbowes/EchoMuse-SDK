@@ -184,8 +184,9 @@ go test -race ./...
 go vet ./...
 ```
 
-The SDK's core, Sendspin player and emulator build without cgo. The optional
-`wakeword/ort` package uses cgo and a target-matched `libonnxruntime.so`. The
-emulator command supplies a Linux ALSA adapter and requires cgo plus
-`libasound.so.2`; the SDK itself does not depend on ALSA. See
+The SDK packages build without cgo. The emulator command also compiles without
+cgo, but its audio adapter is then unavailable. On Linux, audio requires cgo,
+a C compiler at build time, and `libasound.so.2` at run time. The optional
+`wakeword/ort` package separately uses cgo and a target-matched
+`libonnxruntime.so`. The SDK itself does not depend on ALSA. See
 [run the emulator](emulator.md).
