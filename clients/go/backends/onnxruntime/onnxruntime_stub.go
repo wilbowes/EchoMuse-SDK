@@ -1,16 +1,17 @@
 //go:build !linux || !cgo
 
-// Package ort exposes an optional ONNX Runtime backend. The actual backend
-// requires cgo and Linux; the stub keeps the SDK and emulator buildable when
-// those native prerequisites are absent.
-package ort
+// Package onnxruntime exposes an optional ONNX Runtime backend. The actual
+// backend requires cgo and Linux; the stub keeps the build working when those
+// native prerequisites are absent.
+package onnxruntime
 
 import (
 	"errors"
+
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword"
 )
 
-var ErrUnavailable = errors.New("echomuse/wakeword/ort: requires Linux, cgo, a C compiler, and libonnxruntime.so")
+var ErrUnavailable = errors.New("onnxruntime: requires Linux, cgo, a C compiler, and libonnxruntime.so")
 
 type Options struct {
 	Threads                int

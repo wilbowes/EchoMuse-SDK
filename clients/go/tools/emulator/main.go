@@ -52,9 +52,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wilbowes/EchoMuse-SDK/clients/go/cmd/emulator/audio"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/tools/emulator/audio"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/backends/onnxruntime"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/emulator"
-	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword/ort"
+	
 )
 
 func main() {
@@ -99,13 +100,13 @@ func main() {
 	slog.SetDefault(log)
 
 	var localWake *emulator.LocalWakeOptions
-	var inferer *ort.Inferer
+	var inferer *onnxruntime.Inferer
 	if *wakewordEnabled {
 		if *modelDir == "" || *classifier == "" {
 			log.Error("local wakeword needs --wakeword-model-dir and --wakeword-classifier")
 			os.Exit(2)
 		}
-		runtime, err := ort.Open(*ortLibrary)
+		runtime, err := onnxruntime.Open(*ortLibrary)
 		if err != nil {
 			log.Error("ONNX Runtime could not be loaded", "error", err)
 			os.Exit(1)
@@ -114,12 +115,12 @@ func main() {
 		if !filepath.IsAbs(classifierPath) {
 			classifierPath = filepath.Join(*modelDir, classifierPath)
 		}
-		models := ort.Models{
+		models := onnxruntime.Models{
 			Melspec:    filepath.Join(*modelDir, "melspectrogram.onnx"),
 			Embedding:  filepath.Join(*modelDir, "embedding_model.onnx"),
 			Classifier: classifierPath,
 		}
-		inferer, err = runtime.NewInferer(models, ort.DefaultOptions())
+		inferer, err = runtime.NewInferer(models, onnxruntime.DefaultOptions())
 		if err != nil {
 			log.Error("wakeword models could not be loaded", "error", err)
 			os.Exit(1)

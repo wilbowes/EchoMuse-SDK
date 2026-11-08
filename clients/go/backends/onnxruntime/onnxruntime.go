@@ -1,5 +1,9 @@
-// Package ort implements wakeword.Inferer with ONNX Runtime, so the streaming
-// pipeline in the parent package can actually score audio on the device.
+// Package onnxruntime implements wakeword.Inferer with ONNX Runtime, so the
+// streaming pipeline in the core can actually score audio on the device.
+//
+// It is a backend, not part of the core: the core library is pure Go and
+// builds with CGO_ENABLED=0 for every platform, and this package is the
+// optional piece that needs cgo, a C compiler and a Linux ONNX Runtime.
 //
 // The runtime is dlopen'd at RUNTIME (see shim.h) rather than linked, so this
 // package builds and the firmware boots with no libonnxruntime.so present —
@@ -7,9 +11,9 @@
 // word. Only ONNX Runtime's MIT-licensed C header is vendored, in include/;
 // the 12.3MB library is distributed separately.
 //
-// Feeding it: the parent package owns all buffering and calls the three
-// methods here in a fixed order per 80ms chunk. Nothing in this package is
-// safe for concurrent use — one Inferer belongs to one goroutine, matching
+// Feeding it: the core owns all buffering and calls the three methods here in
+// a fixed order per 80ms chunk. Nothing in this package is safe for concurrent
+// use — one Inferer belongs to one goroutine, matching
 // wakeword.Detector's own contract. ORT sessions are not goroutine-safe with
 // the single-threaded, spin-free options used here, and adding a mutex would
 // invite exactly the concurrent use the design rules out.
@@ -20,7 +24,7 @@
 // 243% for ORT's own defaults. See Options.
 //go:build linux && cgo
 
-package ort
+package onnxruntime
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/include -O2
@@ -103,7 +107,7 @@ func Open(libPath string) (*Runtime, error) {
 
 	r := &Runtime{}
 	if err := goErr(C.em_ort_open(cPath, &r.rt)); err != nil {
-		return nil, fmt.Errorf("ort: open %s: %w", libPath, err)
+		return nil, fmt.Errorf("onnxruntime: open %s: %w", libPath, err)
 	}
 	r.version = C.GoString(C.em_ort_version(&r.rt))
 	runtimes[libPath] = r
@@ -145,7 +149,7 @@ type model struct {
 
 func (r *Runtime) load(path, name string, o Options) (*model, error) {
 	if path == "" {
-		return nil, fmt.Errorf("ort: no path for the %s model", name)
+		return nil, fmt.Errorf("onnxruntime: no path for the %s model", name)
 	}
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
@@ -154,7 +158,7 @@ func (r *Runtime) load(path, name string, o Options) (*model, error) {
 	err := goErr(C.em_model_load(&r.rt, cPath, C.int(o.Threads), cBool(o.XNNPACK),
 		cBool(o.AllowSpinning), &md.m))
 	if err != nil {
-		return nil, fmt.Errorf("ort: load %s model %s: %w", name, path, err)
+		return nil, fmt.Errorf("onnxruntime: load %s model %s: %w", name, path, err)
 	}
 	return md, nil
 }
@@ -181,7 +185,7 @@ type streamModel struct {
 // leaking sessions.
 func (r *Runtime) NewInferer(m Models, o Options) (*Inferer, error) {
 	if o.Threads < 1 {
-		return nil, fmt.Errorf("ort: Threads must be at least 1, got %d", o.Threads)
+		return nil, fmt.Errorf("onnxruntime: Threads must be at least 1, got %d", o.Threads)
 	}
 	inf := &Inferer{}
 	var err error
@@ -315,15 +319,15 @@ func (i *Inferer) ResetStream() {
 func (i *Inferer) EmbedStep(frames []float32) ([]float32, error) {
 	sm := i.stream
 	if sm == nil {
-		return nil, errors.New("ort: no streaming embedding model")
+		return nil, errors.New("onnxruntime: no streaming embedding model")
 	}
 	if want := wakeword.MelStep * wakeword.MelBins; len(frames) != want {
-		return nil, fmt.Errorf("ort: embed step wants %d values, got %d", want, len(frames))
+		return nil, fmt.Errorf("onnxruntime: embed step wants %d values, got %d", want, len(frames))
 	}
 	err := goErr(C.em_stream_run(&sm.s, (*C.float)(unsafe.Pointer(&frames[0])),
 		(*C.float)(unsafe.Pointer(&sm.state[0])), (*C.float)(unsafe.Pointer(&sm.emb[0]))))
 	if err != nil {
-		return nil, fmt.Errorf("ort: run streaming embedding: %w", err)
+		return nil, fmt.Errorf("onnxruntime: run streaming embedding: %w", err)
 	}
 	return sm.emb, nil
 }
@@ -350,7 +354,7 @@ func (i *Inferer) Close() error {
 }
 
 // ErrClosed is returned by the inference methods after Close.
-var ErrClosed = errors.New("ort: inferer is closed")
+var ErrClosed = errors.New("onnxruntime: inferer is closed")
 
 // Melspec computes mel frames for the given samples, which are raw int16
 // magnitudes cast to float32 — NOT normalised to ±1. The parent package's
@@ -364,7 +368,7 @@ func (i *Inferer) Melspec(samples []float32) ([]float32, int, error) {
 		return nil, 0, ErrClosed
 	}
 	if len(samples) == 0 {
-		return nil, 0, errors.New("ort: melspec called with no samples")
+		return nil, 0, errors.New("onnxruntime: melspec called with no samples")
 	}
 	shape := [2]C.int64_t{1, C.int64_t(len(samples))}
 	out, err := i.run(i.mel, samples, shape[:])
@@ -372,7 +376,7 @@ func (i *Inferer) Melspec(samples []float32) ([]float32, int, error) {
 		return nil, 0, err
 	}
 	if len(out)%wakeword.MelBins != 0 {
-		return nil, 0, fmt.Errorf("ort: melspec produced %d values, not a multiple of %d bins",
+		return nil, 0, fmt.Errorf("onnxruntime: melspec produced %d values, not a multiple of %d bins",
 			len(out), wakeword.MelBins)
 	}
 	return out, len(out) / wakeword.MelBins, nil
@@ -384,7 +388,7 @@ func (i *Inferer) Embed(window []float32) ([]float32, error) {
 		return nil, ErrClosed
 	}
 	if want := wakeword.MelWindow * wakeword.MelBins; len(window) != want {
-		return nil, fmt.Errorf("ort: embed wants %d values, got %d", want, len(window))
+		return nil, fmt.Errorf("onnxruntime: embed wants %d values, got %d", want, len(window))
 	}
 	shape := [4]C.int64_t{1, wakeword.MelWindow, wakeword.MelBins, 1}
 	out, err := i.run(i.emb, window, shape[:])
@@ -392,7 +396,7 @@ func (i *Inferer) Embed(window []float32) ([]float32, error) {
 		return nil, err
 	}
 	if len(out) != wakeword.FeatDim {
-		return nil, fmt.Errorf("ort: embed produced %d values, want %d", len(out), wakeword.FeatDim)
+		return nil, fmt.Errorf("onnxruntime: embed produced %d values, want %d", len(out), wakeword.FeatDim)
 	}
 	return out, nil
 }
@@ -404,7 +408,7 @@ func (i *Inferer) Classify(feats []float32) (float32, error) {
 		return 0, ErrClosed
 	}
 	if want := wakeword.FeatWindow * wakeword.FeatDim; len(feats) != want {
-		return 0, fmt.Errorf("ort: classify wants %d values, got %d", want, len(feats))
+		return 0, fmt.Errorf("onnxruntime: classify wants %d values, got %d", want, len(feats))
 	}
 	shape := [3]C.int64_t{1, wakeword.FeatWindow, wakeword.FeatDim}
 	out, err := i.run(i.cls, feats, shape[:])
@@ -412,7 +416,7 @@ func (i *Inferer) Classify(feats []float32) (float32, error) {
 		return 0, err
 	}
 	if len(out) != 1 {
-		return 0, fmt.Errorf("ort: classify produced %d values, want 1", len(out))
+		return 0, fmt.Errorf("onnxruntime: classify produced %d values, want 1", len(out))
 	}
 	return out[0], nil
 }
@@ -432,10 +436,10 @@ func (i *Inferer) run(m *model, in []float32, shape []C.int64_t) ([]float32, err
 		&shape[0], C.size_t(len(shape)),
 		&outPtr, &outN))
 	if err != nil {
-		return nil, fmt.Errorf("ort: run %s: %w", m.name, err)
+		return nil, fmt.Errorf("onnxruntime: run %s: %w", m.name, err)
 	}
 	if outPtr == nil {
-		return nil, fmt.Errorf("ort: run %s: no output", m.name)
+		return nil, fmt.Errorf("onnxruntime: run %s: no output", m.name)
 	}
 	defer C.free(unsafe.Pointer(outPtr))
 	m.out = append(m.out[:0], unsafe.Slice((*float32)(unsafe.Pointer(outPtr)), int(outN))...)
