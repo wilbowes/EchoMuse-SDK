@@ -112,7 +112,17 @@ type Options struct {
 	// the controller pushes takes effect on the next reconnect.
 	Credentials transport.Credentials
 
-	// CredentialsDir is where the credentials live on disk.
+	// CredentialsDir is where the device keeps its own state.
+	//
+	// It holds the link credential — the token and the certificate
+	// authority — and it is the device's, not the controller's. The
+	// controller names its own path when it pushes the credential, and the
+	// SDK maps that path onto this directory.
+	//
+	// It is required. A device that does not say where its state lives
+	// cannot be given a credential, and a library that guessed a path
+	// would put it somewhere the application does not look — which leaves
+	// the device on the plain link for ever.
 	CredentialsDir string
 
 	// ShellRunner starts the shell sessions the controller asks for.
@@ -226,6 +236,9 @@ func New(opts Options) (*Device, error) {
 	}
 	if len(opts.Capabilities) == 0 {
 		return nil, errors.New("echomuse: at least one capability is required")
+	}
+	if opts.CredentialsDir == "" {
+		return nil, errors.New("echomuse: a credentials directory is required")
 	}
 	if opts.DiscoverTimeout == 0 {
 		opts.DiscoverTimeout = 5 * time.Second

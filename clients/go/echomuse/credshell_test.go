@@ -14,6 +14,27 @@ import (
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
 )
 
+// TestTheStateDirectoryIsRequired checks that a device says where its
+// state lives.
+//
+// The controller issues the link credential over the shell plane, and the
+// device has to know where to put it. A library that guessed a path would
+// write the credential somewhere the application does not look, and the
+// device would stay on the plain link for ever — so the question is asked
+// rather than answered.
+func TestTheStateDirectoryIsRequired(t *testing.T) {
+	_, err := New(Options{
+		DeviceID:     "no-state-dir",
+		Capabilities: []protocol.Capability{protocol.CapMic},
+	})
+	if err == nil {
+		t.Fatal("the client was built without a state directory")
+	}
+	if !strings.Contains(err.Error(), "credentials directory") {
+		t.Errorf("the error was %q, want it to name the missing directory", err)
+	}
+}
+
 // TestAClientWithNoOptionsRefusesAGeneralCommand checks the default.
 //
 // A client built with no options serves the shell plane, because it has
@@ -27,8 +48,9 @@ import (
 // error, because that is where the controller reads it from.
 func TestAClientWithNoOptionsRefusesAGeneralCommand(t *testing.T) {
 	device, err := New(Options{
-		DeviceID:     "no-options-device",
-		Capabilities: []protocol.Capability{protocol.CapMic},
+		DeviceID:       "no-options-device",
+		Capabilities:   []protocol.Capability{protocol.CapMic},
+		CredentialsDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("building the client: %v", err)
@@ -96,6 +118,7 @@ func TestTheOptInGivesTheHostShell(t *testing.T) {
 	device, err := New(Options{
 		DeviceID:        "opt-in-device",
 		Capabilities:    []protocol.Capability{protocol.CapMic},
+		CredentialsDir:  t.TempDir(),
 		AllowLocalShell: true,
 	})
 	if err != nil {

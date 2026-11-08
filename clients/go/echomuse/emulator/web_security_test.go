@@ -12,8 +12,9 @@ import (
 
 func TestTapEndpointRequiresPostAndSameOrigin(t *testing.T) {
 	device, err := echomuse.New(echomuse.Options{
-		DeviceID:     "ui-test",
-		Capabilities: []protocol.Capability{protocol.CapButtons},
+		DeviceID:       "ui-test",
+		Capabilities:   []protocol.Capability{protocol.CapButtons},
+		CredentialsDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)

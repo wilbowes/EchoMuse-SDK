@@ -77,17 +77,18 @@ type Credentials struct {
 	CAPEM []byte
 }
 
-// DefaultCredentialsDir is where the credentials live on disk.
-const DefaultCredentialsDir = "/data/local/etc/echomuse"
-
 // LoadCredentials reads the credentials from a directory.
+//
+// The directory is the device's own, and the caller names it. There is no
+// default: a library that guessed a path would read the credential from
+// somewhere the application does not know about.
 //
 // The files are re-read on every dial rather than cached, so a credential
 // the controller pushes takes effect on the next reconnect without the
 // device being restarted.
 func LoadCredentials(dir string) (Credentials, error) {
 	if dir == "" {
-		dir = DefaultCredentialsDir
+		return Credentials{}, fmt.Errorf("echomuse: a credentials directory is required")
 	}
 	var creds Credentials
 

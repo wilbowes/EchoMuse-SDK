@@ -32,7 +32,8 @@ type Options struct {
 	DeviceID string
 	// Label is the name the device appears under.
 	Label string
-	// CredentialsDir is where the link credential is kept.
+	// CredentialsDir is where the emulator keeps its own state: the link
+	// credential and the Sendspin identity.
 	CredentialsDir string
 	// Audio is how the emulator reaches the machine's sound card.
 	Audio AudioBackend

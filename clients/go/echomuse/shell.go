@@ -285,7 +285,7 @@ func (d *Device) defaultShellRunner() ShellRunner {
 
 	dir := d.opts.CredentialsDir
 	if dir == "" {
-		dir = CredentialsDir
+		dir = ControllerCredentialPath
 	}
 	return credentialShellRunner{dir: dir}
 }
@@ -597,15 +597,16 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// CredentialsDir is where the SDK looks for the link credentials.
-const CredentialsDir = "/data/local/etc/echomuse"
-
-// ControllerCredentialPath is where the controller puts the link
-// credential.
+// ControllerCredentialPath is the path the controller puts the link
+// credential at.
 //
-// It is the Echo's path, and the controller does not ask the device where
-// its own state lives — so a device that keeps its credentials elsewhere
-// maps this path onto its own.
+// It is the controller's own path, and it is part of the wire contract:
+// the controller pushes the token and the certificate authority there, and
+// it does not ask the device where its state lives.
+//
+// A device keeps its state wherever it likes — the SDK maps this path onto
+// the directory the application named in CredentialsDir. That mapping is
+// the whole of the relationship between the two.
 const ControllerCredentialPath = "/data/local/etc/echomuse"
 
 // WriteCredentials stores the link credentials where the SDK reads them.
@@ -615,7 +616,7 @@ const ControllerCredentialPath = "/data/local/etc/echomuse"
 // by other means.
 func WriteCredentials(dir, token string, caPEM []byte) error {
 	if dir == "" {
-		dir = CredentialsDir
+		return fmt.Errorf("echomuse: a credentials directory is required")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("echomuse: creating %s: %w", dir, err)
