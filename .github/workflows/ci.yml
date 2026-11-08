@@ -20,22 +20,79 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: clients/go/go.mod
-          cache-dependency-path: clients/go/go.sum
+          cache-dependency-path: |
+            clients/go/go.sum
+            clients/go/tools/emulator/go.sum
       - name: Run Go tests
         working-directory: clients/go
+        run: go test -race ./...
+      - name: Run emulator tests
+        working-directory: clients/go/tools/emulator
         run: go test -race ./...
       - name: go vet
         working-directory: clients/go
         run: go vet ./...
+      - name: go vet the emulator
+        working-directory: clients/go/tools/emulator
+        run: go vet ./...
       - name: Check gofmt
-        working-directory: clients/go
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -l clients/go)
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt'd:"
             echo "$unformatted"
             exit 1
           fi
+
+  # The core library must build for any platform the application might
+  # target, without a C toolchain and without the optional inference
+  # runtime. That is what keeps the hardware behind interfaces: the
+  # library is the protocol, the connection and the state, and the engine
+  # that scores a wake word is the application's choice.
+  cross-build:
+    name: Cross-build without cgo (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: arm
+          - os: linux
+            arch: arm64
+          - os: windows
+            arch: amd64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: clients/go/go.mod
+          cache-dependency-path: |
+            clients/go/go.sum
+            clients/go/tools/emulator/go.sum
+      - name: Build the core library
+        working-directory: clients/go
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build ./...
+      - name: Build the inference backend
+        working-directory: clients/go/backends/onnxruntime
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build ./...
+      - name: Build the emulator
+        working-directory: clients/go/tools/emulator
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: go build ./...
 
   workflow-hygiene:
     name: Workflow hygiene
