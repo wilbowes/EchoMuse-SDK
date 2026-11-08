@@ -21,6 +21,7 @@ state. The hardware is behind interfaces the application supplies.
 | `echomuse/display` | Converts ring frames into values a screen can render. |
 | `echomuse/transport` | mDNS discovery, controller addresses, TLS configuration and credential loading. |
 | `echomuse/wakeword` | Pure-Go buffering and feature pipeline around an application supplied inference backend. |
+| `echomuse/vad` | Pure-Go speech detector that gates a bounded turn on speech and ends it when the speech stops. |
 | `echomuse/sendspin` | Full Sendspin network player: discovery, pairing, Noise encryption, time sync, FLAC decoding, buffering and playback clock. |
 | `echomuse/emulator` | Emulator lifecycle and browser UI, built on the SDK contracts. |
 | `echomuse/mockcontroller` | A controller fixture used by SDK tests and local development. |

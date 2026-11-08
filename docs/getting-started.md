@@ -238,6 +238,45 @@ device.SendNoSpeechTimeout()
 "the wake word then silence" has to be tellable from "spoke, and the
 backend had nothing to say".
 
+### The device ends a bounded turn itself
+
+A bounded turn is the one case where the microphone opens without a wake
+word — the user pressed a button, or Home Assistant asked a follow-up
+question. The limits on it are the **device's** own, because the controller
+may fail in the middle of one:
+
+- the turn starts when there is speech in the audio, so the room is not
+  sent before anybody has answered;
+- the turn ends after five seconds of nothing after the last speech;
+- the turn ends if it has run for as long as a turn may run.
+
+A device that waits for `mic_stop` and gets none streams the room for ever.
+The `vad` package implements the first two rules and is pure Go:
+
+```go
+detector := vad.New(vad.Default())
+detector.Open(time.Now())
+
+// On every capture frame:
+switch detector.Push(pcm, time.Now()) {
+case vad.Speaking:
+	device.SendMicAudio(pcm)
+case vad.Quiet:
+	device.SendVADEnd()
+	// Stop the capture: the turn is over.
+case vad.NoSpeech:
+	device.SendNoSpeechTimeout()
+	// Stop the capture: nobody answered.
+case vad.TimedOut:
+	device.SendVADEnd()
+	// Stop the capture: the turn ran for as long as it may.
+}
+```
+
+The controller still ends the turn at the end of speech, exactly as it
+closes a session. These limits are what the device enforces when the
+controller does not.
+
 ## 6. Play the response
 
 ```go
@@ -532,6 +571,8 @@ mock.IssueCredential("token", caPEM)
 - [ ] Capture is 16 kHz signed 16-bit mono; playback is 48 kHz.
 - [ ] The microphone starts when the controller asks, not before.
 - [ ] A bounded turn ends with the right sentinel.
+- [ ] A bounded turn ends by itself: the device's own limits end it when
+      the controller does not.
 - [ ] The display clears when the link drops.
 - [ ] The listen state says what the device actually does.
 - [ ] The shell plane is served, or the credential path is mapped.

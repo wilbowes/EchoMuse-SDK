@@ -5,8 +5,10 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/vad"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword"
 )
 
@@ -109,36 +111,8 @@ func (e *Emulator) StartCapture(ctx context.Context) {
 			n, err := reader.Read(buf)
 			if n > 0 {
 				e.setLevel(peakLevel(buf[:n]))
-				e.mu.Lock()
-				muted := e.muted
-				wakeMode, session := e.wakeMode, e.wakeSession
-				e.mu.Unlock()
-				if !muted {
-					if wakeMode != "" && e.wakeListener != nil {
-						_, scoreErr := e.wakeListener.Push(buf[:n])
-						if scoreErr != nil && scoreErr != wakeword.ErrNotReady {
-							e.log.Error("local wakeword inference failed", "error", scoreErr)
-						}
-						e.mu.Lock()
-						currentSession, currentMode, currentTurn := e.wakeSession, e.wakeMode, e.turnStream
-						e.mu.Unlock()
-						if currentMode == "shadow" || currentTurn {
-							if sendErr := e.device.SendMicAudio(buf[:n]); sendErr != nil {
-								e.log.Debug("the audio did not reach the controller", "error", sendErr)
-								return
-							}
-						} else if currentSession != 0 && currentSession == session {
-							if sendErr := e.device.SendListenAudio(currentSession, buf[:n]); sendErr != nil {
-								e.log.Debug("private audio did not reach the controller", "error", sendErr)
-								return
-							}
-						}
-					} else {
-						if sendErr := e.device.SendMicAudio(buf[:n]); sendErr != nil {
-							e.log.Debug("the audio did not reach the controller", "error", sendErr)
-							return
-						}
-					}
+				if !e.pushCaptureFrame(buf[:n]) {
+					return
 				}
 			}
 			if err != nil {
@@ -152,6 +126,174 @@ func (e *Emulator) StartCapture(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// pushCaptureFrame sends one frame of captured audio to the controller.
+//
+// It reports whether the capture should continue. A bounded turn that
+// has ended by its own rules stops the capture: the turn is over, and a
+// device that kept streaming would be sending the room to a controller
+// that has already moved on.
+func (e *Emulator) pushCaptureFrame(pcm []byte) bool {
+	e.mu.Lock()
+	muted := e.muted
+	wakeMode, session := e.wakeMode, e.wakeSession
+	bounded := e.turnLockMic
+	e.mu.Unlock()
+	if muted {
+		return true
+	}
+
+	// A bounded turn replaces the streaming for the length of the turn.
+	//
+	// `mic_start` with `lock_mic:true` replaces the local wake stream for
+	// the length of the turn, so the turn's own rules — speech to start
+	// it, silence to end it — are the ones that apply to what is sent.
+	//
+	// The wake word is still scored. The device keeps listening locally
+	// during the turn, which is what hears a barge-in over the reply, and
+	// a device that stopped scoring would miss it.
+	if bounded {
+		e.scoreWakeWord(pcm)
+		return e.pushBoundedFrame(pcm)
+	}
+
+	// The wake word is scored on the device, so the microphone is open
+	// whatever the controller asked for.
+	if wakeMode != "" && e.wakeListener != nil {
+		e.scoreWakeWord(pcm)
+
+		e.mu.Lock()
+		currentSession, currentMode, currentTurn := e.wakeSession, e.wakeMode, e.turnStream
+		e.mu.Unlock()
+
+		if currentMode == "shadow" || currentTurn {
+			if sendErr := e.device.SendMicAudio(pcm); sendErr != nil {
+				e.log.Debug("the audio did not reach the controller", "error", sendErr)
+				return false
+			}
+			return true
+		}
+		if currentSession != 0 && currentSession == session {
+			if sendErr := e.device.SendListenAudio(currentSession, pcm); sendErr != nil {
+				e.log.Debug("private audio did not reach the controller", "error", sendErr)
+				return false
+			}
+		}
+		return true
+	}
+
+	if sendErr := e.device.SendMicAudio(pcm); sendErr != nil {
+		e.log.Debug("the audio did not reach the controller", "error", sendErr)
+		return false
+	}
+	return true
+}
+
+// scoreWakeWord scores one frame on the device's own wake word.
+//
+// It is a no-op when the device is not scoring locally.
+func (e *Emulator) scoreWakeWord(pcm []byte) {
+	e.mu.Lock()
+	listener := e.wakeListener
+	e.mu.Unlock()
+	if listener == nil {
+		return
+	}
+	if _, err := listener.Push(pcm); err != nil && err != wakeword.ErrNotReady {
+		e.log.Error("local wakeword inference failed", "error", err)
+	}
+}
+
+// pushBoundedFrame handles one frame of a bounded turn.
+//
+// The turn is gated on speech: nothing is sent until somebody is talking.
+// It ends on its own when the speech stops, when nobody spoke at all, or
+// when it has run for as long as a turn may run. The controller is told
+// which of those happened, with the sentinel the protocol defines.
+func (e *Emulator) pushBoundedFrame(pcm []byte) bool {
+	now := time.Now()
+
+	e.mu.Lock()
+	detector := e.turnVad
+	started := e.turnStarted
+	e.mu.Unlock()
+
+	if detector == nil {
+		return true
+	}
+
+	// The turn is opened once, when the controller asked for the
+	// microphone, so the cap is measured from that moment.
+	if !started {
+		e.mu.Lock()
+		if !e.turnStarted {
+			detector.Open(now)
+			e.turnStarted = true
+		}
+		e.mu.Unlock()
+	}
+
+	state := detector.Push(pcm, now)
+
+	switch state {
+	case vad.Speaking:
+		if sendErr := e.device.SendMicAudio(pcm); sendErr != nil {
+			e.log.Debug("the audio did not reach the controller", "error", sendErr)
+			return false
+		}
+		return true
+
+	case vad.Quiet:
+		// The speech ended. The controller is told, and the turn is over.
+		e.log.Info("the bounded turn ended after the speech stopped")
+		if err := e.device.SendVADEnd(); err != nil {
+			e.log.Debug("the end of the turn did not reach the controller", "error", err)
+		}
+		e.endBoundedTurn()
+		return false
+
+	case vad.NoSpeech:
+		// Nobody spoke at all, so there is nothing to send back.
+		e.log.Info("the bounded turn ended with no speech")
+		if err := e.device.SendNoSpeechTimeout(); err != nil {
+			e.log.Debug("the end of the turn did not reach the controller", "error", err)
+		}
+		e.endBoundedTurn()
+		return false
+
+	case vad.TimedOut:
+		// The turn ran for as long as a turn may run. The controller may
+		// have failed to close it, so the device closes it.
+		e.log.Info("the bounded turn reached its limit")
+		if err := e.device.SendVADEnd(); err != nil {
+			e.log.Debug("the end of the turn did not reach the controller", "error", err)
+		}
+		e.endBoundedTurn()
+		return false
+	}
+
+	// Silent: the turn has not started, so nothing is sent.
+	return true
+}
+
+// endBoundedTurn finishes a bounded turn and gives the microphone back.
+//
+// The capture stops, so a controller that never said `mic_stop` cannot
+// keep the room.
+func (e *Emulator) endBoundedTurn() {
+	e.mu.Lock()
+	e.turnStream = false
+	e.turnLockMic = false
+	e.turnStarted = false
+	detector := e.turnVad
+	e.mu.Unlock()
+
+	if detector != nil {
+		detector.EndTurn()
+	}
+	e.StopCapture()
+	e.ReportListenState()
 }
 
 // StopCapture stops streaming the microphone.
@@ -305,16 +447,26 @@ func (e *Emulator) TapButton() {
 // The emulator streams to the controller, so that is what it says. The
 // controller shows it honestly, and the dashboard labels such a device as
 // streaming.
+//
+// A device that is streaming because of a bounded turn says so too. A
+// device that claimed to be listening privately while it was sending the
+// room would be making a statement it is not true of, and the dashboard
+// is where a user reads whether their device is listening.
 func (e *Emulator) ReportListenState() {
 	e.mu.Lock()
 	mode := e.wakeMode
+	bounded := e.turnLockMic
 	e.mu.Unlock()
+
 	listen, reason := protocol.ListenStream, "the emulator streams to the controller"
 	if mode == "local" {
 		listen, reason = protocol.ListenLocal, "wakeword is scored locally; no microphone audio streams before a crossing"
 	}
 	if mode == "shadow" {
 		listen, reason = protocol.ListenStream, "shadow wakeword scoring is active while audio streams to the controller"
+	}
+	if bounded {
+		listen, reason = protocol.ListenStream, "a bounded turn is streaming the speech that answers the question"
 	}
 	if err := e.device.SendListenState(listen, reason); err != nil {
 		e.log.Debug("the listen state did not reach the controller", "error", err)

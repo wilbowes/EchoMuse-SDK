@@ -113,6 +113,21 @@ still registers microphone support and may report the controller's stream
 mode; use it as a demo control, not as the private-listening guarantee for a
 real client.
 
+## Bounded turns
+
+When the controller asks for the microphone with `lock_mic:true` — the user
+pressed a button, or Home Assistant asked a follow-up question — the
+emulator serves a bounded turn, and it ends that turn itself:
+
+- the turn starts when there is speech in the audio, so the room is not
+  sent before anybody has answered;
+- it ends after five seconds of nothing after the last speech;
+- it ends if it has run for as long as a turn may run.
+
+The controller is told which of those happened, with the sentinel the
+protocol defines, and the microphone is given back. A controller that never
+sends `mic_stop` therefore cannot keep the emulator's microphone open.
+
 ## Reset the local profile
 
 Stop the emulator, then remove its default profile to clear the local

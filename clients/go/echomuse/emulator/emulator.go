@@ -16,6 +16,7 @@ import (
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/sendspin"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/state"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/vad"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword"
 )
 
@@ -53,6 +54,13 @@ type Options struct {
 	// LocalWake enables device-local wakeword scoring with a locally loaded inference backend.
 	LocalWake      *LocalWakeOptions
 	SendspinOutput SendspinOutputBackend
+	// TurnConfig is how the emulator decides when a bounded turn has
+	// speech in it and when the turn is over.
+	//
+	// It is the device's own limit, and it is what stops a controller
+	// that never says `mic_stop` from holding the microphone open. A
+	// zero value uses the defaults.
+	TurnConfig vad.Config
 }
 
 // Emulator is a device that behaves as the controller expects.
@@ -80,6 +88,9 @@ type Emulator struct {
 	wakeMode            string
 	wakeSession         uint32
 	turnStream          bool
+	turnVad             *vad.Detector
+	turnStarted         bool
+	turnLockMic         bool
 	sendspin            *sendspin.Client
 	sendspinName        string
 	sendspinUnpaired    bool
@@ -162,6 +173,7 @@ func New(opts Options) (*Emulator, error) {
 		volume:         50,
 		duckDB:         -18,
 		localWake:      opts.LocalWake,
+		turnVad:        vad.New(opts.TurnConfig),
 	}
 	e.voiceMixCond = sync.NewCond(&e.voiceMixMu)
 	if opts.LocalWake != nil {
@@ -234,6 +246,8 @@ func New(opts Options) (*Emulator, error) {
 		if local && !muted {
 			e.turnStream = true
 		}
+		e.turnLockMic = lockMic
+		e.turnStarted = false
 		e.mu.Unlock()
 		if muted {
 			e.log.Info("the microphone start was ignored because mute is enabled")
@@ -246,6 +260,8 @@ func New(opts Options) (*Emulator, error) {
 		e.mu.Lock()
 		local := e.wakeMode != ""
 		e.turnStream = false
+		e.turnLockMic = false
+		e.turnStarted = false
 		e.mu.Unlock()
 		if !local {
 			e.StopCapture()

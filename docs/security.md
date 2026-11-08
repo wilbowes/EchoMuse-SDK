@@ -18,6 +18,22 @@ The SDK uses controller discovery or a configured URL; it does not treat
 being on the same LAN as authentication. The administrator's controller
 approval and the issued credential are the admission boundary.
 
+## Microphone
+
+The device's own limits bound every stream it opens, so a controller that
+fails mid-turn cannot leave the microphone open.
+
+A bounded turn — the controller's `mic_start` with `lock_mic:true` — is
+gated on speech and ends itself: it starts when there is speech in the
+audio, ends after five seconds of nothing, and ends when it has run for as
+long as a turn may run. The `echomuse/vad` package implements the gate. A
+device that waits for `mic_stop` and never receives one would stream the
+room for ever.
+
+A private-listening session is bounded the same way: the SDK closes it
+after the controller's acknowledgement timeout, after the session's maximum
+length, or when the link drops.
+
 ## Shell plane
 
 The default runner carries the controller's credential transfer and refuses

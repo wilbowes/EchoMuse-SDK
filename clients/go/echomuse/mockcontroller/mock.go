@@ -100,6 +100,8 @@ type Controller struct {
 
 	micFrames      int
 	speakerFrames  int
+	vadEnds        int
+	noSpeech       int
 	credentialSeen bool
 	filesReceived  map[string][]byte
 	approvals      map[string]bool
@@ -210,6 +212,21 @@ func (c *Controller) SpeakerFrames() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.speakerFrames
+}
+
+// VADEnds returns how many times the device said a turn ended after speech.
+func (c *Controller) VADEnds() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.vadEnds
+}
+
+// NoSpeechTimeouts returns how many times the device said a turn ended
+// with no speech at all.
+func (c *Controller) NoSpeechTimeouts() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.noSpeech
 }
 
 // CredentialSeen reports whether the device stored the issued token.
@@ -466,6 +483,14 @@ func (c *Controller) handleData(w http.ResponseWriter, r *http.Request) {
 		case protocol.FrameMic, protocol.FrameListen:
 			c.mu.Lock()
 			c.micFrames++
+			c.mu.Unlock()
+		case protocol.FrameVADEnd:
+			c.mu.Lock()
+			c.vadEnds++
+			c.mu.Unlock()
+		case protocol.FrameNoSpeechTimeout:
+			c.mu.Lock()
+			c.noSpeech++
 			c.mu.Unlock()
 		}
 	}
