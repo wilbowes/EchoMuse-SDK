@@ -169,18 +169,21 @@ The emulator walks the real flow, including the step a person takes in the
 dashboard. That is deliberate: an emulator that approved itself would
 teach an application a flow the real controller does not have.
 
-## The shell plane is served by a real shell, and the path is mapped
+## The shell plane carries the credential, and the credential is enough
 
 The controller reaches a device's filesystem by writing shell commands. The
-SDK's default runner starts `/bin/sh` and pipes it to the WebSocket, so
-the controller's own grammar — heredocs, `case` statements, pipelines —
-works without the SDK understanding any of it.
+wire protocol *is* a shell, so a device that answers it with a real
+`/bin/sh` gets every command the controller writes — as the user running
+the device.
 
-That is the shortest path to a working credential push, and it is also the
-honest one: the controller's protocol *is* a shell.
+The SDK's default runner therefore does not start a shell. It answers the
+controller's credential transfer and refuses everything else: the token and
+the certificate authority are written, and no other command is run. The
+credential is the one thing the plane is needed for, and it is the only
+thing the default gives.
 
-A device that must not expose a general shell implements `ShellRunner` and
-answers only what it chooses.
+A device that is a general-purpose computer can ask for the whole shell
+with `AllowLocalShell`, and the SDK logs a warning when it starts.
 
 ### Why the path is mapped rather than configured on the controller
 

@@ -20,13 +20,16 @@ approval and the issued credential are the admission boundary.
 
 ## Shell plane
 
-`LocalShell` starts `/bin/sh` (or a caller-selected path) and bridges the
-controller's shell messages to it. That grants the controller the privileges
-of the process running the SDK. It is required by this wire protocol for
-credential transfer and maintenance operations, but it is a broad authority
-boundary. Run the process as a dedicated unprivileged user. Embedded
-applications should implement `ShellRunner` with an allowlist rather than
-using `LocalShell`.
+The default runner carries the controller's credential transfer and refuses
+every other command: the controller can push the token and the certificate
+authority, and it cannot run a command. `AllowLocalShell` replaces it with
+`LocalShell`, which starts `/bin/sh` (or a caller-selected path) and bridges
+the controller's shell messages to it. That grants the controller the
+privileges of the process running the SDK, so the SDK logs a warning when
+the shell starts. Use it only for a device that is a general-purpose
+computer whose operator trusts the controller with it, and run the process
+as a dedicated unprivileged user. An application can also implement
+`ShellRunner` with an allowlist of its own.
 
 The credential transfer helper quotes destination paths and accepts only
 octal permission strings for `chmod`. Do not pass untrusted values as shell

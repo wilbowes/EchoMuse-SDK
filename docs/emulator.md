@@ -11,8 +11,7 @@ repository's private-listening requirement and is not a conforming client.
 - Go 1.24 or later.
 - Linux with cgo enabled, a C compiler to build, and the ALSA runtime library
   (`libasound.so.2`) to run microphone and speaker I/O.
-- A POSIX `/bin/sh`, which the default shell plane uses for controller
-  credential transfer.
+- A POSIX `/bin/sh` only if you run the emulator with `--allow-shell`.
 - A reachable EchoMuse controller. mDNS discovery requires the computer and
   controller to share a network that passes multicast DNS; otherwise supply
   `--controller`.
@@ -141,6 +140,7 @@ separate pending device.
 | `--audio-output DEVICE` | system default | Speaker device name. |
 | `--list-audio-devices` | off | List available audio devices and exit. |
 | `--mute-capture` | off | Do not send microphone audio. |
+| `--allow-shell` | off | Let the controller run commands as the emulator process. Use only with a controller you trust. |
 | `--no-window` | off | Do not start the HTTP UI or open a browser. |
 | `--log-level LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 
@@ -151,12 +151,17 @@ go run ./cmd/emulator --list-audio-devices
 go run ./cmd/emulator --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
 ```
 
+The emulator serves the controller's shell protocol for the credential issue.
+By default that plane carries the credential transfer and nothing else, so
+the controller cannot run a command on the machine. `--allow-shell` gives
+the controller the host's full `/bin/sh` and logs a warning when the shell
+starts; use it only with a controller you trust.
+
 The UI exposes device state and a button endpoint without authentication. Keep
 the default loopback bind. Binding `--ui` to a LAN or public interface lets
 other reachable users inspect that state and press the emulator's action
-button. The UI does not expose a general controller credential endpoint, but
-the device itself serves the controller's shell protocol for credential issue;
-run the emulator only on a network/controller you trust.
+button. The UI does not expose a general controller credential endpoint. Run
+the emulator only on a network/controller you trust.
 
 The window also provides a 0–100 speaker volume slider and a microphone mute
 toggle. Volume scales playback PCM and reports changes to the controller. Mute

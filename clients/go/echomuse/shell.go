@@ -48,6 +48,9 @@ type ShellSession interface {
 // An application that must not expose a general shell — a device with
 // sensitive state, or one whose filesystem is not a shell's to give —
 // implements this itself and answers only what it chooses.
+//
+// It is also how an application asks for the host's shell: LocalShell is
+// the implementation of it, and AllowLocalShell selects it.
 type ShellRunner interface {
 	// Start begins a session. The pty flag asks for a terminal rather
 	// than a pipe, which the controller uses for an interactive shell.
@@ -56,8 +59,13 @@ type ShellRunner interface {
 
 // LocalShell starts sessions with the system's shell.
 //
-// It is the default, and it is right for a device that is a general-purpose
-// computer: a Raspberry Pi, a box on a desk, a laptop.
+// It is not the default. The default answers the controller's credential
+// transfer and refuses every other command, because a shell on the device
+// is a shell on the machine the device runs on.
+//
+// It is right for a device that is a general-purpose computer — a
+// Raspberry Pi, a box on a desk, a laptop — and whose operator trusts the
+// controller with it. Set AllowLocalShell to use it.
 type LocalShell struct {
 	// Path is the shell to run. Empty means the system's default.
 	Path string
@@ -171,19 +179,10 @@ func (d *Device) openShell(pty bool) {
 
 	runner := d.opts.ShellRunner
 	if runner == nil {
-		// The default shell maps the controller's credential path onto the
-		// directory this device reads its credentials from, so a device
-		// that does not use the Echo's paths still gets them.
-		local := LocalShell{}
-		if d.opts.CredentialsDir != "" {
-			local.PathMap = func(p string) string {
-				if p == ControllerCredentialPath {
-					return d.opts.CredentialsDir
-				}
-				return p
-			}
+		runner = d.defaultShellRunner()
+		if _, ok := runner.(LocalShell); ok {
+			d.warnLocalShellOnce()
 		}
-		runner = local
 	}
 
 	go func() {
@@ -242,6 +241,53 @@ func (d *Device) openShell(pty bool) {
 		}
 		d.mu.Unlock()
 	}()
+}
+
+// warnLocalShellOnce says that the host shell has been exposed.
+//
+// It is said once, when the shell first starts, because the warning is
+// about the state of the world and the state of the world does not change
+// on every session.
+func (d *Device) warnLocalShellOnce() {
+	d.shellWarnOnce.Do(func() {
+		d.log.Warn("the host shell is exposed to the controller",
+			"shell", "/bin/sh",
+			"note", "every command the controller writes runs as this process")
+	})
+}
+
+// defaultShellRunner is the runner used when the application names none.
+//
+// It is the credential-only runner: the controller gets the shell plane,
+// because that is where it issues the link credential, and it gets nothing
+// else. A device that wants the host's shell asks for it by setting
+// AllowLocalShell, and the request is logged.
+func (d *Device) defaultShellRunner() ShellRunner {
+	if d.opts.ShellRunner != nil {
+		return d.opts.ShellRunner
+	}
+
+	if d.opts.AllowLocalShell {
+		// The local shell maps the controller's credential path onto the
+		// directory this device reads its credentials from, so a device
+		// that does not use the Echo's paths still gets them.
+		local := LocalShell{}
+		if d.opts.CredentialsDir != "" {
+			local.PathMap = func(p string) string {
+				if p == ControllerCredentialPath {
+					return d.opts.CredentialsDir
+				}
+				return p
+			}
+		}
+		return local
+	}
+
+	dir := d.opts.CredentialsDir
+	if dir == "" {
+		dir = CredentialsDir
+	}
+	return credentialShellRunner{dir: dir}
 }
 
 // closeShell ends the shell session.

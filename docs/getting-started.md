@@ -371,9 +371,13 @@ identifies it on the encrypted link — by pushing it over the shell plane
 after an administrator approves it. The device re-reads it on every dial, so
 a rotated credential takes effect on the next reconnect without a restart.
 
-The SDK serves the shell plane for you, using the system's shell by default.
-**A device that does not serve it never receives a credential**, and stays on
-the plain link forever.
+The SDK serves the shell plane for you. **A device that does not serve it
+never receives a credential**, and stays on the plain link forever.
+
+By default the plane carries the controller's credential transfer and
+nothing else — the controller can push the token and the certificate
+authority, and it cannot run a command on your device. That is deliberate:
+a shell on the device is a shell on the machine the device runs on.
 
 Two things to know about it:
 
@@ -393,6 +397,15 @@ Two things to know about it:
   ```go
   device, err := echomuse.New(echomuse.Options{
       ShellRunner: myRestrictedShell{},
+  })
+  ```
+
+- **A device that is a general-purpose computer** can have the host's shell
+  instead, and the SDK will warn you when it starts:
+
+  ```go
+  device, err := echomuse.New(echomuse.Options{
+      AllowLocalShell: true,
   })
   ```
 

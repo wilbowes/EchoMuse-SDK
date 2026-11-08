@@ -68,6 +68,7 @@ func main() {
 		audioOutput     = flag.String("audio-output", "", "the speaker device. Empty uses the system default.")
 		listDevices     = flag.Bool("list-audio-devices", false, "list the machine's microphones and speakers, then exit.")
 		muteCapture     = flag.Bool("mute-capture", false, "do not send the microphone to the controller.")
+		allowShell      = flag.Bool("allow-shell", false, "let the controller run commands as this process. Use only with a controller you trust.")
 		noWindow        = flag.Bool("no-window", false, "run without the window, for a headless machine.")
 		logLevel        = flag.String("log-level", "info", "debug, info, warn or error.")
 		wakewordEnabled = flag.Bool("wakeword", false, "enable local wakeword scoring (requires ONNX Runtime and model files).")
@@ -136,6 +137,7 @@ func main() {
 		CredentialsDir:    *credsDir,
 		Audio:             audio.NewBackend(*audioInput, *audioOutput),
 		MuteCapture:       *muteCapture,
+		AllowLocalShell:   *allowShell,
 		LocalWake:         localWake,
 		Log:               log,
 	})

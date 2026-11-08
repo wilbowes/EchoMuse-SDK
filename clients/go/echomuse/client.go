@@ -119,10 +119,23 @@ type Options struct {
 	//
 	// The controller reaches a device's filesystem over the shell plane,
 	// and it issues the device's link credential that way — so a device
-	// that does not serve this plane never receives one. The default runs
-	// the system's shell, which is right for a general-purpose computer.
-	// A device that must not expose a general shell supplies its own.
+	// that does not serve this plane never receives one. The default
+	// answers that transfer and nothing else; see AllowLocalShell.
 	ShellRunner ShellRunner
+
+	// AllowLocalShell gives the controller the host's shell.
+	//
+	// It is off by default, and it is a large authority: every command
+	// the controller writes runs as the user running this process. The
+	// controller's shell plane is served either way — this process needs
+	// it for the link credential — so the question is not whether the
+	// controller gets a shell, but whether it gets one that can do
+	// anything.
+	//
+	// Turn it on only for a device that is a general-purpose computer and
+	// a controller the operator trusts with it. The SDK logs a warning
+	// when it is enabled.
+	AllowLocalShell bool
 
 	// DiscoverTimeout bounds the mDNS search.
 	DiscoverTimeout time.Duration
@@ -165,6 +178,10 @@ type Device struct {
 	listenSeq      uint16
 	listenAckTimer *time.Timer
 	listenMaxTimer *time.Timer
+
+	// shellWarnOnce guards the warning about the exposed host shell, so
+	// it is said once rather than on every shell session.
+	shellWarnOnce sync.Once
 
 	// playbackBytes counts the audio the controller has sent for the
 	// current response. It is the answer to "did the reply arrive".

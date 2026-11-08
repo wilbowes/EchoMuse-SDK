@@ -43,6 +43,12 @@ type Options struct {
 	// MuteCapture stops the microphone reaching the controller, for a
 	// demonstration where the room should not be heard.
 	MuteCapture bool
+	// AllowLocalShell gives the controller the host's shell.
+	//
+	// It is off by default. The emulator serves the shell plane either
+	// way — the controller issues the link credential over it — but the
+	// default carries the credential transfer and nothing else.
+	AllowLocalShell bool
 	// LocalWake enables device-local wakeword scoring with a locally loaded inference backend.
 	LocalWake      *LocalWakeOptions
 	SendspinOutput SendspinOutputBackend
@@ -177,6 +183,7 @@ func New(opts Options) (*Emulator, error) {
 		ControllerURL:     opts.ControllerURL,
 		ControllerTLSPort: opts.ControllerTLSPort,
 		CredentialsDir:    opts.CredentialsDir,
+		AllowLocalShell:   opts.AllowLocalShell,
 		Logger:            opts.Log,
 	})
 	if err != nil {

@@ -157,10 +157,15 @@ only over `wss`. A device with no CA uses plain `ws` and sends no token. Do
 not set `InsecureSkipVerify`, copy credentials into logs, or share a
 credential directory between devices.
 
-The default `LocalShell` gives the controller a real `/bin/sh` session. This
-is a broad remote-control boundary. Embedded applications should supply a
-restricted `ShellRunner` that implements only the operations they intend to
-expose. See [security review](security.md).
+By default the shell plane carries the controller's credential transfer and
+nothing else: the controller can push the token and the certificate
+authority, and it cannot run a command. That is the right default, because
+a shell on the device is a shell on the machine the device runs on, and
+under a Home Assistant add-on that is every administrator of the
+installation. Set `AllowLocalShell` to expose the host's `/bin/sh`, which
+the SDK logs a warning about when the shell starts, or supply a
+`ShellRunner` that implements only the operations you intend to expose.
+See [security review](security.md).
 
 ## Capabilities and state
 
