@@ -43,6 +43,12 @@ mode `0700`. These permissions protect against other local users, subject to
 the filesystem and operating system honoring Unix modes. Back up the
 credential directory securely and do not check it into source control.
 
+The directory is the device's own, named by the application in
+`CredentialsDir`, and it is required: the SDK asks where the state lives
+rather than falling back to a path the application does not know about. The
+controller's path is mapped onto it, and only the credential files —
+`token` and `ca.pem` — are reachable there.
+
 ## Emulator browser UI
 
 The UI binds to `127.0.0.1:8771` by default. Its state endpoint has no login;

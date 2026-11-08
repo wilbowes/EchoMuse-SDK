@@ -82,11 +82,12 @@ the controller understands.
 ## The wake word is not the SDK's business
 
 The `wakeword` package owns the pipeline, buffering and trigger policy. It
-takes an `Inferer`; `wakeword/ort` supplies an optional Linux+cgo ONNX Runtime
-backend that loads local model paths. The core module still builds without
-cgo. The runtime shared library and model files are installed separately,
-and a client reports degraded/button-only mode if the selected model is not
-available. Local listening must never silently fall back to streaming.
+takes an `Inferer`; the `backends/onnxruntime` module supplies an optional
+Linux+cgo ONNX Runtime backend that loads local model paths. The core module
+still builds without cgo. The runtime shared library and model files are
+installed separately, and a client reports degraded/button-only mode if the
+selected model is not available. Local listening must never silently fall
+back to streaming.
 
 ### The two modes are the application's choice, and it is a privacy choice
 
@@ -188,9 +189,13 @@ with `AllowLocalShell`, and the SDK logs a warning when it starts.
 ### Why the path is mapped rather than configured on the controller
 
 The controller names `/data/local/etc/echomuse`, and it does not ask the
-device where its state lives. The `ShellRunner`'s `PathMap` is how the
-device says "my credentials are here". Only that one path is mapped; a
-command naming an unrelated file still refers to that file.
+device where its state lives. The device's own directory is named by the
+application, in `CredentialsDir`, and the SDK maps the controller's path
+onto it — for the credential-only runner, and through the `ShellRunner`'s
+`PathMap` when the whole shell is exposed.
+
+Only that one path is mapped; a command naming an unrelated file still
+refers to that file.
 
 ## Reconnection is the SDK's job
 

@@ -64,13 +64,16 @@ every setting is lost.
 
 ```go
 device, err := echomuse.New(echomuse.Options{
-	DeviceID:   "pi-touch-kitchen",
-	Version:    "0.1.0",
-	Board:      "pi-touch",
-	Capabilities: capabilities,
+	DeviceID:       "pi-touch-kitchen",
+	Version:        "0.1.0",
+	Board:          "pi-touch",
+	Capabilities:   capabilities,
+	CredentialsDir: "/var/lib/echomuse",
 })
 ```
 
+`CredentialsDir` is where the device keeps its own state, and it is
+required — see [keep the link credential](#11-keep-the-link-credential).
 A hostname works on a machine with a fixed one. A random identifier written
 to disk on first boot works better, and the reason is that the device id is
 public: it travels in mDNS, so anything on the network can read it.
@@ -381,9 +384,9 @@ a shell on the device is a shell on the machine the device runs on.
 
 Two things to know about it:
 
-- **The controller names the Echo's path**: `/data/local/etc/echomuse`. If
-  your device keeps its state elsewhere, map it. The SDK does this for you
-  when you set `CredentialsDir`:
+- **The controller names its own path**: `/data/local/etc/echomuse`. That is
+  the controller's path, not yours. The SDK maps it onto the directory you
+  name in `CredentialsDir`:
 
   ```go
   device, err := echomuse.New(echomuse.Options{
@@ -391,12 +394,16 @@ Two things to know about it:
   })
   ```
 
+  `CredentialsDir` is required. A device that does not say where its state
+  lives cannot be given a credential, and the SDK asks rather than guessing.
+
 - **A device that must not expose a general shell** implements `ShellRunner`
   itself and answers only what it chooses:
 
   ```go
   device, err := echomuse.New(echomuse.Options{
-      ShellRunner: myRestrictedShell{},
+      CredentialsDir: "/var/lib/echomuse",
+      ShellRunner:    myRestrictedShell{},
   })
   ```
 
@@ -405,6 +412,7 @@ Two things to know about it:
 
   ```go
   device, err := echomuse.New(echomuse.Options{
+      CredentialsDir:  "/var/lib/echomuse",
       AllowLocalShell: true,
   })
   ```
@@ -448,7 +456,7 @@ the speech that follows the wake word leaves the device.
 The SDK's `wakeword` package holds the pipeline for the second way. It is
 the openWakeWord pipeline in three chained models — a melspectrogram, an
 embedding and a classifier — with pure-Go buffering and a local ONNX Runtime
-backend available as `wakeword/ort`:
+backend available in the `backends/onnxruntime` module:
 
 ```go
 detector, err := wakeword.New(myInferer)
@@ -494,7 +502,8 @@ mock := mockcontroller.New(mockcontroller.Options{})
 defer mock.Close()
 
 device, err := echomuse.New(echomuse.Options{
-	ControllerURL: mock.URL(),
+	ControllerURL:  mock.URL(),
+	CredentialsDir: t.TempDir(),
 })
 ```
 
@@ -516,6 +525,8 @@ mock.IssueCredential("token", caPEM)
 
 - [ ] The device id is stable across reboots.
 - [ ] Every announced capability is true of the device.
+- [ ] The state directory is named, writable, and not shared with another
+      device.
 - [ ] The device asks to be admitted, if it wants the pairing approval
       rather than the ordinary one.
 - [ ] Capture is 16 kHz signed 16-bit mono; playback is 48 kHz.

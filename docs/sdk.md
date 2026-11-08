@@ -8,8 +8,10 @@ the conformance suite.
 
 ## What is included
 
-The module is `github.com/wilbowes/EchoMuse-SDK/clients/go` and requires Go
-1.24 or later.
+The core module is `github.com/wilbowes/EchoMuse-SDK/clients/go` and
+requires Go 1.24 or later. It is pure Go: it builds with `CGO_ENABLED=0`
+for every platform, and it holds the protocol, the connection and the
+state. The hardware is behind interfaces the application supplies.
 
 | Package | Role |
 |---|---|
@@ -19,12 +21,16 @@ The module is `github.com/wilbowes/EchoMuse-SDK/clients/go` and requires Go
 | `echomuse/display` | Converts ring frames into values a screen can render. |
 | `echomuse/transport` | mDNS discovery, controller addresses, TLS configuration and credential loading. |
 | `echomuse/wakeword` | Pure-Go buffering and feature pipeline around an application supplied inference backend. |
-| `echomuse/wakeword/ort` | Optional Linux+cgo ONNX Runtime backend for the openWakeWord feature models and classifier. |
 | `echomuse/sendspin` | Full Sendspin network player: discovery, pairing, Noise encryption, time sync, FLAC decoding, buffering and playback clock. |
 | `echomuse/emulator` | Emulator lifecycle and browser UI, built on the SDK contracts. |
 | `echomuse/mockcontroller` | A controller fixture used by SDK tests and local development. |
 
-The emulator command lives in `cmd/emulator`.
+Two further modules sit beside the core, and neither is part of it:
+
+| Module | Role |
+|---|---|
+| `clients/go/backends/onnxruntime` | Optional Linux+cgo ONNX Runtime backend for the openWakeWord feature models and classifier. It is one implementation of `wakeword.Inferer`; an application may bring another. |
+| `clients/go/tools/emulator` | The emulator command, its ALSA adapter and the ONNX Runtime backend. It is a program, not a library. |
 
 ## Connection lifecycle
 
@@ -56,6 +62,7 @@ func run(ctx context.Context) error {
 			protocol.CapPairing,
 		},
 		ControllerURL: "ws://192.168.1.10:8767", // omit for mDNS
+		CredentialsDir: "/var/lib/echomuse", // where this device keeps its state
 	})
 	if err != nil {
 		return err
@@ -105,13 +112,13 @@ capture, model loading/runtime, pre-roll policy, and stopping capture after a
 close. Do not send microphone data to a remote inference service in local mode.
 
 `wakeword.Inferer` isolates the streaming feature pipeline from the model
-runtime. `wakeword/ort` provides a ready ONNX Runtime implementation for Linux
-amd64 and arm64. It loads `libonnxruntime.so` dynamically and takes the
-melspectrogram, embedding, and classifier paths explicitly; it does not bundle
-the runtime or wakeword model files. This keeps the core SDK cross-buildable
-without cgo while allowing applications to use native local inference. The
-optional package needs cgo, a C compiler, and the matching runtime shared
-library on the target system.
+runtime. The `backends/onnxruntime` module provides a ready ONNX Runtime
+implementation for Linux amd64 and arm64. It loads `libonnxruntime.so`
+dynamically and takes the melspectrogram, embedding, and classifier paths
+explicitly; it does not bundle the runtime or wakeword model files. This
+keeps the core SDK cross-buildable without cgo while allowing applications
+to use native local inference. The backend module needs cgo, a C compiler,
+and the matching runtime shared library on the target system.
 
 ## Sendspin and telemetry
 
@@ -147,8 +154,10 @@ buffer dimensions and callback behavior.
 
 An unpaired device can call `StartPairing`; the controller's dashboard
 administrator approves it. The controller then sends the link token and CA
-through the shell plane. `CredentialsDir` controls where the SDK reads them;
-without it the SDK uses the controller's default path. The emulator uses
+through the shell plane. `CredentialsDir` is where the device keeps that
+credential, and it is required: the SDK asks where the device's state lives
+rather than guessing a path the application does not know about. The
+controller's own path is mapped onto it. The emulator uses
 `~/.echomuse/emulator`.
 
 When a CA is available and the controller advertises its encrypted port, the
@@ -192,6 +201,6 @@ go vet ./...
 The SDK packages build without cgo. The emulator command also compiles without
 cgo, but its audio adapter is then unavailable. On Linux, audio requires cgo,
 a C compiler at build time, and `libasound.so.2` at run time. The optional
-`wakeword/ort` package separately uses cgo and a target-matched
+The `backends/onnxruntime` module separately uses cgo and a target-matched
 `libonnxruntime.so`. The SDK itself does not depend on ALSA. See
 [run the emulator](emulator.md).

@@ -22,8 +22,8 @@ repository's private-listening requirement and is not a conforming client.
 From the repository root:
 
 ```bash
-cd clients/go
-go run ./cmd/emulator
+cd clients/go/tools/emulator
+go run .
 ```
 
 The UI listens on `127.0.0.1:8771` by default and opens in the browser. The
@@ -37,24 +37,24 @@ plus the Sendspin identity and pairing state.
 To bypass mDNS, specify the controller URL:
 
 ```bash
-go run ./cmd/emulator --controller ws://192.168.1.10:8767
+go run . --controller ws://192.168.1.10:8767
 ```
 
 Build a no-audio command for Linux amd64 and Raspberry Pi arm64 without a C
 toolchain:
 
 ```bash
-cd clients/go
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/echomuse-emulator-linux-amd64 ./cmd/emulator
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dist/echomuse-emulator-linux-arm64 ./cmd/emulator
+cd clients/go/tools/emulator
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/echomuse-emulator-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dist/echomuse-emulator-linux-arm64 .
 ```
 
 These builds have no audio backend. For audio on Linux, build with cgo enabled
 and a C compiler:
 
 ```bash
-cd clients/go
-CGO_ENABLED=1 go build -o dist/echomuse-emulator-linux ./cmd/emulator
+cd clients/go/tools/emulator
+CGO_ENABLED=1 go build -o dist/echomuse-emulator-linux .
 ```
 
 The runtime target also needs `libasound.so.2`. Cross-compiling with audio
@@ -70,7 +70,7 @@ must match the controller model identifier, and the shared feature models,
 classifier, and runtime library must be installed for the target architecture.
 
 ```bash
-go run ./cmd/emulator \
+go run . \
   --wakeword \
   --onnxruntime /usr/lib/libonnxruntime.so \
   --wakeword-model-dir ./models/oww \
@@ -80,9 +80,9 @@ go run ./cmd/emulator \
 This optional backend requires cgo, a C compiler, and a Linux ONNX Runtime
 shared library. To build an emulator with it enabled, compile on the target or
 use the matching cross C compiler and `CGO_ENABLED=1`. The default
-`CGO_ENABLED=0` SDK build includes a stub that reports the missing runtime and
-keeps the rest of the SDK portable. Wakeword models and ONNX Runtime are not
-bundled with the SDK.
+`CGO_ENABLED=0` build includes a stub that reports the missing runtime and
+keeps the rest portable. Wakeword models and ONNX Runtime are not bundled
+with the SDK.
 
 ## Sendspin player
 
@@ -104,8 +104,8 @@ emulator falls back to the injected audio backend.
 To run without audio capture or without the browser UI:
 
 ```bash
-go run ./cmd/emulator --mute-capture
-go run ./cmd/emulator --no-window
+go run . --mute-capture
+go run . --no-window
 ```
 
 `--mute-capture` suppresses microphone transmission for that run. The emulator
@@ -134,7 +134,7 @@ separate pending device.
 | `--controller URL` | mDNS | Controller base URL, such as `ws://192.168.1.10:8767`. |
 | `--controller-tls-port N` | `0` | Encrypted WebSocket port when using a fixed controller address. |
 | `--device-id ID` | machine hostname | Stable identity shown by the controller. |
-| `--credentials DIR` | `~/.echomuse/emulator` | Directory for token and CA files. Keep it private and persistent. |
+| `--credentials DIR` | `~/.echomuse/emulator` | Directory for the device's state: the token, CA and Sendspin identity. Keep it private and persistent. |
 | `--ui ADDRESS` | `127.0.0.1:8771` | Browser UI bind address. |
 | `--audio-input DEVICE` | system default | Microphone device name. |
 | `--audio-output DEVICE` | system default | Speaker device name. |
@@ -147,8 +147,8 @@ separate pending device.
 List devices first if the default audio devices are wrong:
 
 ```bash
-go run ./cmd/emulator --list-audio-devices
-go run ./cmd/emulator --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
+go run . --list-audio-devices
+go run . --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
 ```
 
 The emulator serves the controller's shell protocol for the credential issue.
@@ -261,7 +261,7 @@ a laptop with a built-in microphone, a webcam and a headset — does, and
 the system default is rarely the one a person wants.
 
 ```bash
-go run ./cmd/emulator --list-audio-devices
+go run . --list-audio-devices
 ```
 
 ```
@@ -278,7 +278,7 @@ Speakers:
 The name goes to `--audio-input` or `--audio-output`:
 
 ```bash
-go run ./cmd/emulator --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
+go run . --audio-input alsa:plughw:2,6 --audio-output alsa:plughw:2,0
 ```
 
 Each entry has a complete ALSA PCM name and a human-readable description.

@@ -12,7 +12,7 @@ with redistribution under MIT.
 | [grandcat/zeroconf](https://github.com/grandcat/zeroconf) | `go.mod` | BSD-3-Clause | Frank Wang |
 | [flynn/noise](https://github.com/flynn/noise) | `go.mod` | BSD-3-Clause | Prime Directive, Inc. |
 | [mewkiz/flac](https://github.com/mewkiz/flac) | `go.mod` | Public domain | mewkiz |
-| [ONNX Runtime C API](https://github.com/microsoft/onnxruntime) | `echomuse/wakeword/ort/include/onnxruntime_c_api.h` | MIT | Microsoft Corporation; see adjacent `COPYING` |
+| [ONNX Runtime C API](https://github.com/microsoft/onnxruntime) | `backends/onnxruntime/include/onnxruntime_c_api.h` | MIT | Microsoft Corporation; see adjacent `COPYING` |
 
 ## Related projects
 

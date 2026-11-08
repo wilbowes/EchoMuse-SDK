@@ -8,8 +8,8 @@
 //
 // # Running it
 //
-//	go run ./cmd/emulator
-//	go run ./cmd/emulator --controller ws://192.168.1.10:8767
+//	go run .
+//	go run . --controller ws://192.168.1.10:8767
 //
 // The window opens in the browser. The controller's dashboard is where the
 // device is approved — that is the one human decision in the flow.
@@ -52,10 +52,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wilbowes/EchoMuse-SDK/clients/go/tools/emulator/audio"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/backends/onnxruntime"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/emulator"
-	
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/tools/emulator/audio"
 )
 
 func main() {

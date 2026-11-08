@@ -304,9 +304,10 @@ A device that does not serve this plane never receives a credential.
 
 ### The path
 
-The controller names the Echo's path: `/data/local/etc/echomuse`. A device
-that keeps its state elsewhere maps it. The SDK does this when
-`CredentialsDir` is set.
+The controller names its own path: `/data/local/etc/echomuse`. That is the
+controller's path, not the device's. A device keeps its state wherever it
+likes, and the SDK maps the controller's path onto the directory the
+application named in `CredentialsDir`, which is required.
 
 ## Configuration
 
