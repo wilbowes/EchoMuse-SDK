@@ -16,6 +16,7 @@ import (
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/sendspin"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/state"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/turn"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/vad"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword"
 )
@@ -88,8 +89,7 @@ type Emulator struct {
 	wakeMode            string
 	wakeSession         uint32
 	turnStream          bool
-	turnVad             *vad.Detector
-	turnStarted         bool
+	turnGuard           *turn.Guard
 	turnLockMic         bool
 	sendspin            *sendspin.Client
 	sendspinName        string
@@ -173,7 +173,6 @@ func New(opts Options) (*Emulator, error) {
 		volume:         50,
 		duckDB:         -18,
 		localWake:      opts.LocalWake,
-		turnVad:        vad.New(opts.TurnConfig),
 	}
 	e.voiceMixCond = sync.NewCond(&e.voiceMixMu)
 	if opts.LocalWake != nil {
@@ -203,6 +202,12 @@ func New(opts Options) (*Emulator, error) {
 		return nil, err
 	}
 	e.device = device
+	// The bounded turn is the device's own, so the limits live in the core.
+	e.turnGuard = turn.New(turn.Options{
+		Device:   device,
+		Detector: vad.New(opts.TurnConfig),
+		Log:      opts.Log,
+	})
 
 	device.State().OnChange(func(s state.Snapshot) {
 		e.onState(s)
@@ -247,12 +252,14 @@ func New(opts Options) (*Emulator, error) {
 			e.turnStream = true
 		}
 		e.turnLockMic = lockMic
-		e.turnStarted = false
 		e.mu.Unlock()
 		if muted {
 			e.log.Info("the microphone start was ignored because mute is enabled")
 			return
 		}
+		// The bounded turn is the device's own, so it starts when the
+		// microphone does.
+		e.turnGuard.Start(time.Now())
 		e.StartCapture(e.ctx)
 		e.ReportListenState()
 	})
@@ -261,8 +268,8 @@ func New(opts Options) (*Emulator, error) {
 		local := e.wakeMode != ""
 		e.turnStream = false
 		e.turnLockMic = false
-		e.turnStarted = false
 		e.mu.Unlock()
+		e.turnGuard.End()
 		if !local {
 			e.StopCapture()
 		}

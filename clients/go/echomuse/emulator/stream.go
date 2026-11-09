@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
-	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/vad"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/turn"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/wakeword"
 )
 
@@ -211,70 +211,21 @@ func (e *Emulator) scoreWakeWord(pcm []byte) {
 // It ends on its own when the speech stops, when nobody spoke at all, or
 // when it has run for as long as a turn may run. The controller is told
 // which of those happened, with the sentinel the protocol defines.
+//
+// The limits live in the core's turn package, so this program and every
+// other client bound a turn the same way.
 func (e *Emulator) pushBoundedFrame(pcm []byte) bool {
-	now := time.Now()
-
-	e.mu.Lock()
-	detector := e.turnVad
-	started := e.turnStarted
-	e.mu.Unlock()
-
-	if detector == nil {
+	switch e.turnGuard.Push(pcm, time.Now()) {
+	case turn.OutcomeSent:
 		return true
-	}
-
-	// The turn is opened once, when the controller asked for the
-	// microphone, so the cap is measured from that moment.
-	if !started {
-		e.mu.Lock()
-		if !e.turnStarted {
-			detector.Open(now)
-			e.turnStarted = true
-		}
-		e.mu.Unlock()
-	}
-
-	state := detector.Push(pcm, now)
-
-	switch state {
-	case vad.Speaking:
-		if sendErr := e.device.SendMicAudio(pcm); sendErr != nil {
-			e.log.Debug("the audio did not reach the controller", "error", sendErr)
-			return false
-		}
+	case turn.OutcomeNone:
+		// Silent: the turn has not started, so nothing is sent.
 		return true
-
-	case vad.Quiet:
-		// The speech ended. The controller is told, and the turn is over.
-		e.log.Info("the bounded turn ended after the speech stopped")
-		if err := e.device.SendVADEnd(); err != nil {
-			e.log.Debug("the end of the turn did not reach the controller", "error", err)
-		}
-		e.endBoundedTurn()
-		return false
-
-	case vad.NoSpeech:
-		// Nobody spoke at all, so there is nothing to send back.
-		e.log.Info("the bounded turn ended with no speech")
-		if err := e.device.SendNoSpeechTimeout(); err != nil {
-			e.log.Debug("the end of the turn did not reach the controller", "error", err)
-		}
-		e.endBoundedTurn()
-		return false
-
-	case vad.TimedOut:
-		// The turn ran for as long as a turn may run. The controller may
-		// have failed to close it, so the device closes it.
-		e.log.Info("the bounded turn reached its limit")
-		if err := e.device.SendVADEnd(); err != nil {
-			e.log.Debug("the end of the turn did not reach the controller", "error", err)
-		}
+	default:
+		// The turn is over, whatever ended it.
 		e.endBoundedTurn()
 		return false
 	}
-
-	// Silent: the turn has not started, so nothing is sent.
-	return true
 }
 
 // endBoundedTurn finishes a bounded turn and gives the microphone back.
@@ -285,13 +236,9 @@ func (e *Emulator) endBoundedTurn() {
 	e.mu.Lock()
 	e.turnStream = false
 	e.turnLockMic = false
-	e.turnStarted = false
-	detector := e.turnVad
 	e.mu.Unlock()
 
-	if detector != nil {
-		detector.EndTurn()
-	}
+	e.turnGuard.End()
 	e.StopCapture()
 	e.ReportListenState()
 }
