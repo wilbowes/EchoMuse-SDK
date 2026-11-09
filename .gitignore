@@ -12,3 +12,7 @@ actionlint.tgz
 *.test
 *.out
 coverage.*
+
+# The locally built sidecar binary.
+/clients/go/tools/sidecar/echomuse-sidecar
+/echomuse-sidecar

@@ -113,6 +113,41 @@ func connection(s state.Snapshot) (string, string) {
 	}
 }
 
+// Config is the device configuration the application writes.
+//
+// The controller owns the wake word and the audio settings, so this is what
+// the device asks for rather than what it decides.
+type Config struct {
+	Board              string  `json:"board"`
+	WakeMode          string  `json:"wakeMode"`
+	WakeThreshold     float64 `json:"wakeThreshold"`
+	WakeWordEnabled   bool    `json:"wakeWordEnabled"`
+	WakeSound         bool    `json:"wakeSound"`
+	BargeIn           bool    `json:"bargeIn"`
+	StartupVolume     int     `json:"startupVolume"`
+	MicGainDb         int     `json:"micGainDb"`
+	VadThreshold      float64 `json:"vadThreshold"`
+	VadSpeechMs       int     `json:"vadSpeechMs"`
+	VadSilenceMs      int     `json:"vadSilenceMs"`
+	Volume            int     `json:"volume"`
+	DuckDb            float64 `json:"duckDb"`
+	MuteButton        bool    `json:"muteButton"`
+	VolumeButtonSound bool    `json:"volumeButtonSound"`
+}
+
+// readConfig reads the device configuration.
+func readConfig(path string) (Config, error) {
+	var c Config
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return c, fmt.Errorf("echomuse-sidecar: decoding the configuration: %w", err)
+	}
+	return c, nil
+}
+
 func main() {
 	var (
 		controller = flag.String("controller", "", "controller URL; empty discovers by mDNS")
@@ -120,6 +155,7 @@ func main() {
 		board      = flag.String("board", "home-panel", "board name, shown in Home Assistant")
 		creds      = flag.String("credentials-dir", "", "where the link credential lives")
 		stateFile  = flag.String("state-file", "", "write the state here as JSON")
+		configFile = flag.String("config-file", "", "read the device configuration from here")
 		socketPath = flag.String("socket", "", "serve the state on this unix socket")
 		verbose    = flag.Bool("verbose", false, "log at debug level")
 	)
@@ -157,6 +193,24 @@ func main() {
 		Detector: vad.New(vad.Default()),
 		Log:      log,
 	})
+
+	// The configuration is applied when the controller pushes one, and the
+	// file is where the application's settings arrive.
+	applyConfig := func(c protocol.Config) {
+		log.Info("the controller pushed a configuration", "model", c.OwwModel, "threshold", c.OwwThreshold)
+		if c.StartupVolume != nil {
+			log.Info("the controller set the startup volume", "volume", *c.StartupVolume)
+		}
+	}
+	device.OnConfig(applyConfig)
+	if *configFile != "" {
+		if c, err := readConfig(*configFile); err == nil {
+			log.Info("read the device configuration", "file", *configFile)
+			_ = c
+		} else if !errors.Is(err, os.ErrNotExist) {
+			log.Warn("the device configuration could not be read", "error", err)
+		}
+	}
 
 	reporter := &stateReporter{
 		log:    log,
