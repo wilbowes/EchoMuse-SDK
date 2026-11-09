@@ -92,6 +92,12 @@ type Colour struct {
 	B int `json:"b"`
 }
 
+// configPollInterval is how often the configuration file is checked.
+//
+// The application writes it when the settings change, and the change is
+// rare, so this only decides how quickly a change is noticed.
+const configPollInterval = time.Second
+
 // connection derives the connection state from a snapshot.
 //
 // The SDK reports the link and the admission separately, and a display wants
@@ -117,22 +123,27 @@ func connection(s state.Snapshot) (string, string) {
 //
 // The controller owns the wake word and the audio settings, so this is what
 // the device asks for rather than what it decides.
+//
+// Every field is a pointer, so an absent key means "the application did not
+// set this" and the device keeps what it had. A plain value would make
+// "unset" and "set to zero" the same thing, and a threshold of zero is not
+// a threshold at all.
 type Config struct {
-	Board              string  `json:"board"`
-	WakeMode          string  `json:"wakeMode"`
-	WakeThreshold     float64 `json:"wakeThreshold"`
-	WakeWordEnabled   bool    `json:"wakeWordEnabled"`
-	WakeSound         bool    `json:"wakeSound"`
-	BargeIn           bool    `json:"bargeIn"`
-	StartupVolume     int     `json:"startupVolume"`
-	MicGainDb         int     `json:"micGainDb"`
-	VadThreshold      float64 `json:"vadThreshold"`
-	VadSpeechMs       int     `json:"vadSpeechMs"`
-	VadSilenceMs      int     `json:"vadSilenceMs"`
-	Volume            int     `json:"volume"`
-	DuckDb            float64 `json:"duckDb"`
-	MuteButton        bool    `json:"muteButton"`
-	VolumeButtonSound bool    `json:"volumeButtonSound"`
+	Board              *string  `json:"board,omitempty"`
+	WakeMode          *string  `json:"wakeMode,omitempty"`
+	WakeThreshold     *float64 `json:"wakeThreshold,omitempty"`
+	WakeWordEnabled   *bool    `json:"wakeWordEnabled,omitempty"`
+	WakeSound         *bool    `json:"wakeSound,omitempty"`
+	BargeIn           *bool    `json:"bargeIn,omitempty"`
+	StartupVolume     *int     `json:"startupVolume,omitempty"`
+	MicGainDb         *int     `json:"micGainDb,omitempty"`
+	VadThreshold      *float64 `json:"vadThreshold,omitempty"`
+	VadSpeechMs       *int     `json:"vadSpeechMs,omitempty"`
+	VadSilenceMs      *int     `json:"vadSilenceMs,omitempty"`
+	Volume            *int     `json:"volume,omitempty"`
+	DuckDb            *float64 `json:"duckDb,omitempty"`
+	MuteButton        *bool    `json:"muteButton,omitempty"`
+	VolumeButtonSound *bool    `json:"volumeButtonSound,omitempty"`
 }
 
 // readConfig reads the device configuration.
@@ -146,6 +157,127 @@ func readConfig(path string) (Config, error) {
 		return c, fmt.Errorf("echomuse-sidecar: decoding the configuration: %w", err)
 	}
 	return c, nil
+}
+
+// applyConfig turns a configuration into the settings the device uses.
+//
+// The configuration is a set of instructions, not a picture of the whole
+// device: a key that is absent was not set, and the device keeps what it
+// had. So each key is applied on its own, and one bad key does not stop
+// the others from being applied.
+func applyConfig(c Config, guard *turn.Guard, log *slog.Logger) {
+	if c.VadThreshold != nil || c.VadSpeechMs != nil || c.VadSilenceMs != nil {
+		// The detector keeps the settings it has for the keys the
+		// configuration did not mention.
+		cfg := guard.Detector().Config()
+		if c.VadThreshold != nil {
+			cfg.Threshold = *c.VadThreshold
+		}
+		if c.VadSpeechMs != nil {
+			cfg.SpeechMs = *c.VadSpeechMs
+		}
+		if c.VadSilenceMs != nil {
+			cfg.SilenceMs = *c.VadSilenceMs
+		}
+		guard.Configure(cfg)
+		log.Info("the speech detector was reconfigured",
+			"threshold", cfg.Threshold, "speech_ms", cfg.SpeechMs, "silence_ms", cfg.SilenceMs)
+	}
+	if c.StartupVolume != nil {
+		log.Info("the startup volume was set", "volume", *c.StartupVolume)
+	}
+	if c.Volume != nil {
+		log.Info("the volume was set", "volume", *c.Volume)
+	}
+	if c.MicGainDb != nil {
+		log.Info("the microphone gain was set", "gain_db", *c.MicGainDb)
+	}
+	if c.WakeThreshold != nil {
+		log.Info("the wake word threshold was set", "threshold", *c.WakeThreshold)
+	}
+	if c.WakeMode != nil {
+		log.Info("the wake word mode was set", "mode", *c.WakeMode)
+	}
+	if c.WakeWordEnabled != nil {
+		log.Info("the wake word was turned on or off", "enabled", *c.WakeWordEnabled)
+	}
+	if c.BargeIn != nil {
+		log.Info("barge-in was turned on or off", "enabled", *c.BargeIn)
+	}
+	if c.WakeSound != nil {
+		log.Info("the wake sound was turned on or off", "enabled", *c.WakeSound)
+	}
+	if c.DuckDb != nil {
+		log.Info("the duck level was set", "duck_db", *c.DuckDb)
+	}
+	if c.MuteButton != nil {
+		log.Info("the mute button was turned on or off", "enabled", *c.MuteButton)
+	}
+	if c.VolumeButtonSound != nil {
+		log.Info("the volume button sound was turned on or off", "enabled", *c.VolumeButtonSound)
+	}
+	if c.Board != nil {
+		log.Info("the board name was set", "board", *c.Board)
+	}
+}
+
+// watchConfig applies the configuration file whenever it changes.
+//
+// The application writes the file when the settings change, so the sidecar
+// has to notice. Polling is enough: the file is small and the change is
+// rare, and a file watch would fail on a device whose filesystem does not
+// support the inotify events it needs.
+func watchConfig(ctx context.Context, path string, guard *turn.Guard, log *slog.Logger) {
+	if path == "" {
+		return
+	}
+
+	// The configuration is applied once before the watch starts, so the
+	// settings a device was configured with are in force from the first
+	// frame rather than from whenever the file happened to change.
+	last := ""
+	if data, err := os.ReadFile(path); err == nil {
+		last = string(data)
+		if c, err := readConfig(path); err == nil {
+			log.Info("read the device configuration", "file", path)
+			applyConfig(c, guard, log)
+		} else {
+			log.Warn("the device configuration could not be read", "error", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.Warn("the device configuration could not be read", "error", err)
+	}
+
+	ticker := time.NewTicker(configPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					log.Warn("the device configuration could not be read", "error", err)
+				}
+				continue
+			}
+			raw := string(data)
+			if raw == last {
+				continue
+			}
+			last = raw
+
+			c, err := readConfig(path)
+			if err != nil {
+				log.Warn("the device configuration could not be read", "error", err)
+				continue
+			}
+			log.Info("the device configuration changed")
+			applyConfig(c, guard, log)
+		}
+	}
 }
 
 func main() {
@@ -194,23 +326,14 @@ func main() {
 		Log:      log,
 	})
 
-	// The configuration is applied when the controller pushes one, and the
-	// file is where the application's settings arrive.
-	applyConfig := func(c protocol.Config) {
+	// The configuration the controller pushes is applied, and the file is
+	// where the application's settings arrive.
+	device.OnConfig(func(c protocol.Config) {
 		log.Info("the controller pushed a configuration", "model", c.OwwModel, "threshold", c.OwwThreshold)
 		if c.StartupVolume != nil {
 			log.Info("the controller set the startup volume", "volume", *c.StartupVolume)
 		}
-	}
-	device.OnConfig(applyConfig)
-	if *configFile != "" {
-		if c, err := readConfig(*configFile); err == nil {
-			log.Info("read the device configuration", "file", *configFile)
-			_ = c
-		} else if !errors.Is(err, os.ErrNotExist) {
-			log.Warn("the device configuration could not be read", "error", err)
-		}
-	}
+	})
 
 	reporter := &stateReporter{
 		log:    log,
@@ -229,6 +352,8 @@ func main() {
 	defer cancel()
 
 	go reporter.run(ctx)
+
+	go watchConfig(ctx, *configFile, guard, log)
 
 	go func() {
 		<-ctx.Done()
@@ -314,6 +439,7 @@ func (r *stateReporter) publish(s state.Snapshot) {
 		Thinking:         s.Thinking,
 		Muted:            s.Muted,
 		Volume:           s.Volume,
+		Level:            r.guard.Detector().Level(),
 		Pattern:          string(view.Pattern),
 		LastError:        s.LastError,
 		UpdatedAt:         time.Now().UTC(),

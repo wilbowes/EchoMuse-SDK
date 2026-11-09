@@ -168,3 +168,15 @@ func (g *Guard) End() {
 // Detector returns the speech detector, so a program can report the level
 // it is seeing.
 func (g *Guard) Detector() *vad.Detector { return g.detector }
+
+// Configure replaces the detector's configuration.
+//
+// The new settings take effect from the next frame, and the measured noise
+// floor is kept, because the floor is a property of the room rather than of
+// the settings.
+//
+// This is not safe for concurrent use: the audio path drives the guard from
+// a single goroutine.
+func (g *Guard) Configure(cfg vad.Config) {
+	g.detector.Configure(cfg)
+}

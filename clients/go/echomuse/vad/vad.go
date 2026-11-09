@@ -187,6 +187,9 @@ type Detector struct {
 	// primed is whether a frame has been seen, so that the floor is not
 	// compared against zero.
 	primed bool
+	// level is the most recent frame's level, as a percentage of full
+	// scale. A level meter is drawn from it.
+	level int
 }
 
 // New returns a Detector.
@@ -199,6 +202,19 @@ func New(cfg Config) *Detector {
 
 // Config returns the configuration in force, with the defaults filled in.
 func (d *Detector) Config() Config { return d.cfg }
+
+// Configure replaces the configuration in force.
+//
+// The new configuration takes effect from the next frame. The measured
+// noise floor is kept, because it is a property of the room rather than of
+// the settings, and relearning it would make the detector deaf for a
+// second after every change.
+//
+// This is not safe for concurrent use: the audio path drives the detector
+// from a single goroutine, the same way it drives the wake word scorer.
+func (d *Detector) Configure(cfg Config) {
+	d.cfg = cfg.withDefaults()
+}
 
 // Open begins a turn at the given moment.
 //
@@ -221,6 +237,7 @@ func (d *Detector) Open(now time.Time) {
 // ends when the silence has lasted long enough, which is what Quiet says.
 func (d *Detector) Push(pcm []byte, now time.Time) State {
 	level := rms(pcm)
+	d.level = percent(level)
 
 	// The cap is checked first, because it applies to the whole turn:
 	// whatever the audio is doing, the turn ends when it is over.
@@ -344,6 +361,24 @@ func (d *Detector) Reset() {
 // Speaking reports whether the detector considers the turn to have started.
 func (d *Detector) Speaking() bool { return d.speaking }
 
+// Level is the level of the most recent frame, on a scale of 0 to 100.
+//
+// It is the level of the most recent frame rather than a running maximum,
+// so a meter drawn from it follows the room instead of sticking at the
+// loudest thing that ever happened. It is zero before any frame has been
+// seen.
+//
+// The scale is in decibels below full scale, so the quiet end of it is
+// stretched out rather than the loud end. A room that is quiet still moves
+// the meter, which is what makes it readable.
+//
+// The detector is the only place that sees every frame, including the ones
+// before the speech starts, so it is the only place a level meter can be
+// fed from.
+func (d *Detector) Level() int {
+	return d.level
+}
+
 // EndTurn forgets the turn but keeps the measured noise floor.
 //
 // The floor is a property of the room, not of the turn, so a turn that
@@ -375,4 +410,29 @@ func rms(pcm []byte) float64 {
 		return 0
 	}
 	return math.Sqrt(sum / float64(count))
+}
+
+// percent is a level as a percentage of full scale.
+//
+// The scale is in decibels rather than in amplitude, because that is how a
+// level is read: a quiet room and a loud one differ by a ratio, not by a
+// difference, and an amplitude scale spends almost all of its range on
+// sounds that are too loud to happen.
+//
+// The bottom of the scale is 60 dB below full scale, which is quieter than
+// the noise of a quiet room, and the top is full scale itself. So a meter
+// drawn from it spends its travel on the range a person is actually in.
+func percent(level float64) int {
+	if level <= 0 {
+		return 0
+	}
+	decibels := 20 * math.Log10(level/32767)
+	p := int((decibels + 60) * 100 / 60)
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
 }
