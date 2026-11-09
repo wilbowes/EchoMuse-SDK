@@ -133,9 +133,28 @@ func TestTheOptInGivesTheHostShell(t *testing.T) {
 
 // controllerPush is the command the controller writes to push a file.
 //
-// It is the shape of the real controller's push: the heredoc, then the
-// mode and the confirmation on the line after it.
+// It is the shape of the real controller's push: the heredoc comes first
+// and the redirect names the destination after it, the mode and the
+// confirmation are on the same line as the command, and the base64 body
+// follows.
+//
+// The order matters. A test written from the implementation rather than
+// from the wire is a test that passes while the device fails, which is
+// what happened here — the SDK parsed `base64 -d > PATH << 'DELIM'` and
+// the controller sends `base64 -d << 'DELIM' > PATH`.
 func controllerPush(dest string, data []byte, mode string) string {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	return "base64 -d << 'EMSDK_B64_EOF' > " + dest + ".part && " +
+		"chmod " + mode + " " + dest + ".part && echo TRANSFER_OK\n" +
+		encoded + "\nEMSDK_B64_EOF\n"
+}
+
+// controllerPushRedirectFirst is the other order the redirect can take.
+//
+// A controller is free to name the destination before the heredoc, and a
+// parser that only understands one of the two is a parser that fails on
+// half the controllers there are.
+func controllerPushRedirectFirst(dest string, data []byte, mode string) string {
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return "base64 -d > " + dest + ".part << 'EMSDK_B64_EOF'\n" +
 		encoded + "\nEMSDK_B64_EOF\n" +
@@ -215,6 +234,61 @@ func TestCredentialShellAcceptsTheControllersPush(t *testing.T) {
 	}
 	if string(got) != string(ca) {
 		t.Errorf("the certificate authority was %q, want %q", got, ca)
+	}
+}
+
+// TestCredentialShellAcceptsEitherRedirectOrder checks that the parser
+// takes the destination whichever way round the redirect is written.
+//
+// The controller names the destination after the heredoc, but a
+// controller is free to name it before, and a device that only
+// understands one of the two is a device that gets no credential and no
+// encrypted link.
+func TestCredentialShellAcceptsEitherRedirectOrder(t *testing.T) {
+	for name, push := range map[string]func(string, []byte, string) string{
+		"heredoc first":  controllerPush,
+		"redirect first": controllerPushRedirectFirst,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			runner := credentialShellRunner{dir: dir}
+
+			session, err := runner.Start(nil, false)
+			if err != nil {
+				t.Fatalf("starting the session: %v", err)
+			}
+			defer session.Close()
+
+			token := []byte("a-link-token\n")
+			dest := ControllerCredentialPath + "/token"
+			if _, err := session.Write([]byte(push(dest, token, "600"))); err != nil {
+				t.Fatalf("the transfer was refused: %v", err)
+			}
+
+			answer := readAnswer(t, session)
+			if !strings.Contains(answer, "TRANSFER_OK") {
+				t.Errorf("the transfer was answered with %q, want it to confirm", answer)
+			}
+
+			// The file lands as a .part and is renamed when the
+			// controller's check agrees, so the check is part of the
+			// transfer.
+			if _, err := session.Write([]byte(controllerVerify(dest, token))); err != nil {
+				t.Fatalf("the verification was refused: %v", err)
+			}
+			answer = readAnswer(t, session)
+			if !strings.Contains(answer, "VERIFY_OK") {
+				t.Errorf("the verification was answered with %q, want it to confirm", answer)
+			}
+
+			got, err := os.ReadFile(filepath.Join(dir, "token"))
+			if err != nil {
+				t.Fatalf("reading the token: %v", err)
+			}
+			if string(got) != string(token) {
+				t.Errorf("the token was %q, want %q", got, token)
+			}
+		})
 	}
 }
 

@@ -283,31 +283,33 @@ type transferCommand struct {
 
 // parseTransfer reads the controller's base64 heredoc.
 //
-// The controller pushes a file as a base64 heredoc, and the line that
-// follows it sets the mode and asks for the confirmation:
+// The controller pushes a file as a base64 heredoc. It names the decoder
+// it wants, the destination, and the mode, and it asks for the
+// confirmation:
 //
-//	base64 -d > PATH << 'DELIM'
+//	base64 -d << 'DELIM' > PATH && chmod MODE PATH && echo TRANSFER_OK
 //	<base64>
 //	DELIM
-//	chmod MODE PATH && echo TRANSFER_OK
+//
+// The decoder may be `base64`, `busybox base64` or a python one-liner, and
+// the redirect may come before or after the heredoc, so the command is
+// taken apart by what is in it rather than by its exact order.
 func parseTransfer(text string) (transferCommand, parseState) {
-	idx := strings.Index(text, "base64 -d > ")
+	idx := strings.Index(text, "base64")
 	if idx < 0 {
 		return transferCommand{}, parseNoMatch
 	}
-	// Whatever came before the heredoc has to be the end of another
+	// Whatever came before the command has to be the end of another
 	// command, or the text is something else entirely.
 	if before := strings.TrimSpace(text[:idx]); before != "" && !strings.HasSuffix(before, "&&") {
 		return transferCommand{}, parseNoMatch
 	}
 
-	rest := text[idx+len("base64 -d > "):]
+	rest := text[idx:]
 	open := strings.Index(rest, " << ")
 	if open < 0 {
 		return transferCommand{}, parseIncomplete
 	}
-	dest := strings.TrimSpace(rest[:open])
-
 	after := rest[open+len(" << "):]
 	if !strings.HasPrefix(after, "'") {
 		return transferCommand{}, parseNoMatch
@@ -319,10 +321,15 @@ func parseTransfer(text string) (transferCommand, parseState) {
 	delim := after[1 : 1+end]
 	after = after[2+end:]
 
-	if !strings.HasPrefix(after, "\n") {
+	// The rest of the command line comes after the delimiter, and the body
+	// follows it. The controller puts the redirect and the confirmation
+	// there, so the command line is everything up to the first newline.
+	lineEnd := strings.Index(after, "\n")
+	if lineEnd < 0 {
 		return transferCommand{}, parseIncomplete
 	}
-	body := after[1:]
+	command := after[:lineEnd]
+	body := after[lineEnd+1:]
 	terminator := "\n" + delim + "\n"
 	stop := strings.Index(body, terminator)
 	if stop < 0 {
@@ -336,25 +343,64 @@ func parseTransfer(text string) (transferCommand, parseState) {
 		return transferCommand{}, parseNoMatch
 	}
 
+	// The destination is named by the redirect, which may come before or
+	// after the heredoc.
+	dest, ok := parseRedirectDest(text[:idx+open], command)
+	if !ok {
+		return transferCommand{}, parseNoMatch
+	}
+
 	cmd := transferCommand{
 		dest:    dest,
 		payload: data,
 		length:  len(text) - len(tail),
 	}
 
-	// The confirmation line belongs to the same command. It is waited
-	// out, because a controller that sends it in a frame of its own has
-	// not finished asking yet.
+	// The mode and the confirmation are on the command line. A controller
+	// that puts them after the body instead is answered from the tail.
+	cmd.mode, cmd.marker = parseModeAndMarker(command)
 	if tail != "" {
 		lineEnd := strings.Index(tail, "\n")
 		if lineEnd < 0 {
 			return transferCommand{}, parseIncomplete
 		}
-		line := tail[:lineEnd]
-		cmd.mode, cmd.marker = parseModeAndMarker(line)
+		tailMode, tailMarker := parseModeAndMarker(tail[:lineEnd])
+		if cmd.mode == "" {
+			cmd.mode = tailMode
+		}
+		if cmd.marker == "" {
+			cmd.marker = tailMarker
+		}
 		cmd.length += lineEnd + 1
 	}
 	return cmd, parseMatched
+}
+
+// parseRedirectDest finds the path the controller is writing to.
+//
+// The redirect is either before the heredoc, as `> PATH << 'DELIM'`, or
+// after it, as `<< 'DELIM' > PATH`, and the path is the first word after
+// the redirect.
+func parseRedirectDest(before, after string) (string, bool) {
+	for _, text := range []string{before, after} {
+		idx := strings.Index(text, "> ")
+		if idx < 0 {
+			continue
+		}
+		path := strings.TrimSpace(text[idx+2:])
+		if path == "" {
+			continue
+		}
+		// The path ends at the first space, which is where the mode and
+		// the confirmation start.
+		if space := strings.IndexAny(path, " \t"); space >= 0 {
+			path = path[:space]
+		}
+		if path != "" {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // chmodCommand is the mode the controller asks for on a file it pushed.

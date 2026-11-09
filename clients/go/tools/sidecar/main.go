@@ -50,6 +50,10 @@ type State struct {
 	Connection string `json:"connection"`
 	// ConnectionReason says why, in words a person can read.
 	ConnectionReason string `json:"connection_reason"`
+	// Pairing is true while the device is asking to be admitted. It is
+	// what makes the difference between a request an administrator can
+	// act on and a device waiting in a list.
+	Pairing bool `json:"pairing"`
 
 	// Phase is what the device is doing right now.
 	Phase string `json:"phase"`
@@ -121,22 +125,41 @@ const configPollInterval = time.Second
 // connection derives the connection state from a snapshot.
 //
 // The SDK reports the link and the admission separately, and a display wants
-// one answer. "Connected" means the device is admitted and the link is up;
-// "Unpaired" means the controller has not admitted it yet, which is the
-// ordinary state of a device waiting to be approved.
+// one answer. The answer has to be the truth about the link, because a
+// device that has reached the controller and is waiting for approval is not
+// the same thing as a device that cannot reach the controller at all, and a
+// person looking at the panel needs to tell them apart.
+//
+//	connected     the controller admitted this device and the link is up
+//	disconnected  the device is admitted but the link is down
+//	pending       the controller has not admitted it yet
+//	refused       the controller refused its credentials
+//	disconnected  the link to the controller is down
+//
+// The order matters: the phase says what the controller said about this
+// device, and the link says whether the conversation is still open. A
+// pending device whose link is up is still pending.
 func connection(s state.Snapshot) (string, string) {
-	switch {
-	case s.Approved && s.LinkUp:
-		return "connected", "the controller admitted this device"
-	case s.Approved:
-		return "unpaired", "the device is admitted but the link is down"
-	case s.LinkUp:
-		return "unpaired", "the controller has not admitted this device yet"
-	case s.Phase == state.PhaseRefused:
+	switch s.Phase {
+	case state.PhaseRefused:
 		return "refused", "the controller refused this device's credentials"
-	default:
-		return "disconnected", "the link to the controller is down"
+	case state.PhasePending:
+		return "pending", s.PhaseReason
+	case state.PhaseReady:
+		if s.LinkUp {
+			return "connected", "the controller admitted this device"
+		}
+		return "disconnected", "the device is admitted but the link is down"
 	}
+	// The link is up but the phase is not one of the above, which means the
+	// controller has admitted it and the state tracker has not caught up.
+	if s.LinkUp {
+		return "connected", "the controller admitted this device"
+	}
+	if s.Approved {
+		return "disconnected", "the device is admitted but the link is down"
+	}
+	return "disconnected", "the link to the controller is down"
 }
 
 // Config is the device configuration the application writes.
@@ -526,6 +549,7 @@ func (r *stateReporter) publish(s state.Snapshot) {
 	next := State{
 		Connection:       conn,
 		ConnectionReason: reason,
+		Pairing:          r.device.PairingOpen(),
 		Phase:            string(s.Phase),
 		PhaseReason:      s.PhaseReason,
 		Listen:           string(s.Listen),
@@ -570,6 +594,9 @@ func (r *stateReporter) publish(s state.Snapshot) {
 // same compares two states, ignoring the timestamp.
 func same(a, b State) bool {
 	if a.Connection != b.Connection || a.Phase != b.Phase || a.Listen != b.Listen {
+		return false
+	}
+	if a.Pairing != b.Pairing {
 		return false
 	}
 	if a.Listening != b.Listening || a.Speaking != b.Speaking || a.Thinking != b.Thinking || a.Muted != b.Muted {
