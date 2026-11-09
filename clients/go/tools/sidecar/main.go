@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse"
+	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/audiodevice"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/display"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/protocol"
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/echomuse/state"
@@ -78,11 +79,30 @@ type State struct {
 	// Palette is the ring's colours, in order.
 	Palette []Colour `json:"palette"`
 
+	// AudioInputs are the microphones this device could use.
+	AudioInputs []Endpoint `json:"audio_inputs"`
+	// AudioOutputs are the speakers this device could use.
+	AudioOutputs []Endpoint `json:"audio_outputs"`
+	// SelectedAudioInput is the microphone in use.
+	SelectedAudioInput string `json:"selected_audio_input"`
+	// SelectedAudioOutput is the speaker in use.
+	SelectedAudioOutput string `json:"selected_audio_output"`
+
 	// LastError is the most recent error, if any.
 	LastError string `json:"last_error"`
 
 	// UpdatedAt is when this state was produced.
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Endpoint is one audio endpoint the device could use.
+//
+// The name is what the backend is given to open it, and the description is
+// what a person recognises.
+type Endpoint struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Default     bool   `json:"default,omitempty"`
 }
 
 // Colour is one indicator's colour.
@@ -129,7 +149,7 @@ func connection(s state.Snapshot) (string, string) {
 // "unset" and "set to zero" the same thing, and a threshold of zero is not
 // a threshold at all.
 type Config struct {
-	Board              *string  `json:"board,omitempty"`
+	Board             *string  `json:"board,omitempty"`
 	WakeMode          *string  `json:"wakeMode,omitempty"`
 	WakeThreshold     *float64 `json:"wakeThreshold,omitempty"`
 	WakeWordEnabled   *bool    `json:"wakeWordEnabled,omitempty"`
@@ -144,6 +164,12 @@ type Config struct {
 	DuckDb            *float64 `json:"duckDb,omitempty"`
 	MuteButton        *bool    `json:"muteButton,omitempty"`
 	VolumeButtonSound *bool    `json:"volumeButtonSound,omitempty"`
+	// AudioInput is the microphone to use. An empty name is the system
+	// default.
+	AudioInput *string `json:"audioInput,omitempty"`
+	// AudioOutput is the speaker to use. An empty name is the system
+	// default.
+	AudioOutput *string `json:"audioOutput,omitempty"`
 }
 
 // readConfig reads the device configuration.
@@ -165,7 +191,7 @@ func readConfig(path string) (Config, error) {
 // device: a key that is absent was not set, and the device keeps what it
 // had. So each key is applied on its own, and one bad key does not stop
 // the others from being applied.
-func applyConfig(c Config, guard *turn.Guard, log *slog.Logger) {
+func applyConfig(c Config, guard *turn.Guard, reporter *stateReporter, log *slog.Logger) {
 	if c.VadThreshold != nil || c.VadSpeechMs != nil || c.VadSilenceMs != nil {
 		// The detector keeps the settings it has for the keys the
 		// configuration did not mention.
@@ -219,6 +245,14 @@ func applyConfig(c Config, guard *turn.Guard, log *slog.Logger) {
 	if c.Board != nil {
 		log.Info("the board name was set", "board", *c.Board)
 	}
+	if c.AudioInput != nil {
+		reporter.selectAudioInput(*c.AudioInput)
+		log.Info("the microphone was set", "device", *c.AudioInput)
+	}
+	if c.AudioOutput != nil {
+		reporter.selectAudioOutput(*c.AudioOutput)
+		log.Info("the speaker was set", "device", *c.AudioOutput)
+	}
 }
 
 // watchConfig applies the configuration file whenever it changes.
@@ -227,7 +261,7 @@ func applyConfig(c Config, guard *turn.Guard, log *slog.Logger) {
 // has to notice. Polling is enough: the file is small and the change is
 // rare, and a file watch would fail on a device whose filesystem does not
 // support the inotify events it needs.
-func watchConfig(ctx context.Context, path string, guard *turn.Guard, log *slog.Logger) {
+func watchConfig(ctx context.Context, path string, guard *turn.Guard, reporter *stateReporter, log *slog.Logger) {
 	if path == "" {
 		return
 	}
@@ -240,7 +274,7 @@ func watchConfig(ctx context.Context, path string, guard *turn.Guard, log *slog.
 		last = string(data)
 		if c, err := readConfig(path); err == nil {
 			log.Info("read the device configuration", "file", path)
-			applyConfig(c, guard, log)
+			applyConfig(c, guard, reporter, log)
 		} else {
 			log.Warn("the device configuration could not be read", "error", err)
 		}
@@ -275,7 +309,7 @@ func watchConfig(ctx context.Context, path string, guard *turn.Guard, log *slog.
 				continue
 			}
 			log.Info("the device configuration changed")
-			applyConfig(c, guard, log)
+			applyConfig(c, guard, reporter, log)
 		}
 	}
 }
@@ -289,6 +323,7 @@ func main() {
 		stateFile  = flag.String("state-file", "", "write the state here as JSON")
 		configFile = flag.String("config-file", "", "read the device configuration from here")
 		socketPath = flag.String("socket", "", "serve the state on this unix socket")
+		pair       = flag.Bool("pair", false, "ask the controller to admit this device")
 		verbose    = flag.Bool("verbose", false, "log at debug level")
 	)
 	flag.Parse()
@@ -351,9 +386,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// The audio devices are found before anything is published, so the
+	// first state the application reads already carries them.
+	reporter.discoverAudio()
+
+	// A device that has never been seen arrives as pending, and the
+	// dashboard offers an approval for it. Asking to pair puts the request
+	// in front of an administrator instead, which is what a person setting
+	// the device up wants.
+	if *pair {
+		device.StartPairing()
+	}
+
 	go reporter.run(ctx)
 
-	go watchConfig(ctx, *configFile, guard, log)
+	go watchConfig(ctx, *configFile, guard, reporter, log)
 
 	go func() {
 		<-ctx.Done()
@@ -403,6 +450,54 @@ type stateReporter struct {
 	last State
 	// haveLast is whether anything has been published yet.
 	haveLast bool
+	// inputs and outputs are the audio endpoints the machine has.
+	inputs  []Endpoint
+	outputs []Endpoint
+	// selectedInput and selectedOutput are the endpoints in use.
+	selectedInput  string
+	selectedOutput string
+}
+
+// selectAudioInput records the microphone in use.
+//
+// A name that is not in the list is still recorded: the machine may have a
+// device the listing did not find, and refusing it would leave the device
+// with no microphone at all.
+func (r *stateReporter) selectAudioInput(name string) {
+	r.mu.Lock()
+	r.selectedInput = name
+	r.mu.Unlock()
+}
+
+// selectAudioOutput records the speaker in use.
+func (r *stateReporter) selectAudioOutput(name string) {
+	r.mu.Lock()
+	r.selectedOutput = name
+	r.mu.Unlock()
+}
+
+// discoverAudio finds the audio endpoints the machine has.
+//
+// A machine with no sound card is not an error: the device still works as a
+// display, it just cannot hear or speak.
+func (r *stateReporter) discoverAudio() {
+	inputs, outputs, err := audiodevice.List()
+	if err != nil {
+		r.log.Info("no audio devices were found", "error", err)
+		return
+	}
+	r.mu.Lock()
+	r.inputs = nil
+	r.outputs = nil
+	for _, d := range inputs {
+		r.inputs = append(r.inputs, Endpoint{Name: d.Name, Description: d.Description, Default: d.Default})
+	}
+	for _, d := range outputs {
+		r.outputs = append(r.outputs, Endpoint{Name: d.Name, Description: d.Description, Default: d.Default})
+	}
+	r.mu.Unlock()
+	r.log.Info("the audio devices were found",
+		"inputs", len(inputs), "outputs", len(outputs))
 }
 
 func (r *stateReporter) run(ctx context.Context) {
@@ -442,11 +537,18 @@ func (r *stateReporter) publish(s state.Snapshot) {
 		Level:            r.guard.Detector().Level(),
 		Pattern:          string(view.Pattern),
 		LastError:        s.LastError,
-		UpdatedAt:         time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
 	}
 	for _, c := range view.Palette {
 		next.Palette = append(next.Palette, Colour{R: int(c.R), G: int(c.G), B: int(c.B)})
 	}
+
+	r.mu.Lock()
+	next.AudioInputs = append(next.AudioInputs, r.inputs...)
+	next.AudioOutputs = append(next.AudioOutputs, r.outputs...)
+	next.SelectedAudioInput = r.selectedInput
+	next.SelectedAudioOutput = r.selectedOutput
+	r.mu.Unlock()
 
 	r.mu.Lock()
 	if r.haveLast && same(r.last, next) {
@@ -475,6 +577,22 @@ func same(a, b State) bool {
 	}
 	if a.Volume != b.Volume || a.Level != b.Level || a.Pattern != b.Pattern || a.LastError != b.LastError {
 		return false
+	}
+	if a.SelectedAudioInput != b.SelectedAudioInput || a.SelectedAudioOutput != b.SelectedAudioOutput {
+		return false
+	}
+	if len(a.AudioInputs) != len(b.AudioInputs) || len(a.AudioOutputs) != len(b.AudioOutputs) {
+		return false
+	}
+	for i := range a.AudioInputs {
+		if a.AudioInputs[i] != b.AudioInputs[i] {
+			return false
+		}
+	}
+	for i := range a.AudioOutputs {
+		if a.AudioOutputs[i] != b.AudioOutputs[i] {
+			return false
+		}
 	}
 	if len(a.Palette) != len(b.Palette) {
 		return false
