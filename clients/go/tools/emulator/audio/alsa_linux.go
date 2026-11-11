@@ -7,6 +7,7 @@ package audio
 #include <dlfcn.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -16,6 +17,16 @@ typedef struct {
     void *pcm;
     int (*open_fn)(void **, const char *, int, int);
     int (*set_params_fn)(void *, int, int, unsigned int, unsigned int, int, unsigned int);
+    void *(*hw_params_malloc_fn)(void *);
+    int (*hw_params_any_fn)(void *);
+    int (*hw_params_set_access_fn)(void *, int);
+    int (*hw_params_set_format_fn)(void *, int);
+    int (*hw_params_set_channels_fn)(void *, unsigned int);
+    int (*hw_params_set_rate_near_fn)(void *, unsigned int, int *);
+    int (*hw_params_set_period_size_near_fn)(void *, unsigned long, int *);
+    int (*hw_params_set_buffer_size_near_fn)(void *, unsigned long, int *);
+    int (*hw_params_fn)(void *);
+    void (*hw_params_free_fn)(void *);
     long (*writei_fn)(void *, const void *, unsigned long);
     long (*readi_fn)(void *, void *, unsigned long);
     int (*delay_fn)(void *, long *);
@@ -32,6 +43,16 @@ static int em_alsa_open(em_alsa *a, const char *device, int stream, unsigned int
 #define LOAD(name, field) do { *(void **)(&a->field) = dlsym(a->lib, name); if (!a->field) return -ENOSYS; } while (0)
     LOAD("snd_pcm_open", open_fn);
     LOAD("snd_pcm_set_params", set_params_fn);
+    LOAD("snd_pcm_hw_params_malloc", hw_params_malloc_fn);
+    LOAD("snd_pcm_hw_params_any", hw_params_any_fn);
+    LOAD("snd_pcm_hw_params_set_access", hw_params_set_access_fn);
+    LOAD("snd_pcm_hw_params_set_format", hw_params_set_format_fn);
+    LOAD("snd_pcm_hw_params_set_channels", hw_params_set_channels_fn);
+    LOAD("snd_pcm_hw_params_set_rate_near", hw_params_set_rate_near_fn);
+    LOAD("snd_pcm_hw_params_set_period_size_near", hw_params_set_period_size_near_fn);
+    LOAD("snd_pcm_hw_params_set_buffer_size_near", hw_params_set_buffer_size_near_fn);
+    LOAD("snd_pcm_hw_params", hw_params_fn);
+    LOAD("snd_pcm_hw_params_free", hw_params_free_fn);
     LOAD("snd_pcm_writei", writei_fn);
     LOAD("snd_pcm_readi", readi_fn);
     LOAD("snd_pcm_delay", delay_fn);
@@ -43,12 +64,47 @@ static int em_alsa_open(em_alsa *a, const char *device, int stream, unsigned int
     // ALSA constants: playback=0, S16_LE=2, RW_INTERLEAVED=3.
     int rc = a->open_fn(&a->pcm, device, stream, 0);
     if (rc < 0) return rc;
-    rc = a->set_params_fn(a->pcm, 2, 3, channels, rate, 1, latency_us);
-    if (rc < 0) {
-        a->close_fn(a->pcm);
-        a->pcm = NULL;
-        return rc;
+    // The buffer is set EXPLICITLY, and not by asking for a latency.
+    //
+    // snd_pcm_set_params computes the buffer from the latency, and on a
+    // device whose periods are large — a sof-hda-dsp on a laptop, where
+    // one period is 1024 frames at 48 kHz — a 100 ms latency asks for a
+    // buffer of hundreds of megabytes. The allocation is in the kernel
+    // and the driver, so it does not show up in the Go heap and it is not
+    // freed when the handle is closed.
+    //
+    // A period of 1024 frames and four periods of buffer is enough for
+    // the emulator's use of the device, and it is a few hundred
+    // kilobytes on any hardware.
+    {
+        void *hw = a->hw_params_malloc_fn(a->pcm);
+        if (!hw) {
+            a->close_fn(a->pcm);
+            a->pcm = NULL;
+            return -ENOMEM;
+        }
+        int err = 0;
+        err |= a->hw_params_any_fn(hw);
+        err |= a->hw_params_set_access_fn(hw, 3);
+        err |= a->hw_params_set_format_fn(hw, 2);
+        err |= a->hw_params_set_channels_fn(hw, channels);
+        int dir = 0, rate_actual = (int)rate;
+        err |= a->hw_params_set_rate_near_fn(hw, rate, &rate_actual);
+        int period = 0;
+        err |= a->hw_params_set_period_size_near_fn(hw, 1024, &period);
+        int buffer = 0;
+        err |= a->hw_params_set_buffer_size_near_fn(hw, 4096, &buffer);
+        if (err == 0) {
+            err = a->hw_params_fn(hw);
+        }
+        a->hw_params_free_fn(hw);
+        if (err < 0) {
+            a->close_fn(a->pcm);
+            a->pcm = NULL;
+            return err;
+        }
     }
+    (void)latency_us;
     return 0;
 }
 
@@ -191,7 +247,7 @@ func (b *alsaBackend) Capture(ctx context.Context, rate int) (io.ReadCloser, err
 		b.setError(err)
 		return nil, err
 	}
-	return &alsaCapture{ctx: ctx, handle: h}, nil
+	return &alsaCapture{ctx: ctx, handle: h, buf: newCBuffer(captureBufBytes)}, nil
 }
 func (b *alsaBackend) Playback(ctx context.Context, rate int) (io.WriteCloser, error) {
 	b.mu.RLock()
@@ -202,7 +258,7 @@ func (b *alsaBackend) Playback(ctx context.Context, rate int) (io.WriteCloser, e
 		b.setError(err)
 		return nil, err
 	}
-	return &alsaPlayback{ctx: ctx, handle: h}, nil
+	return &alsaPlayback{ctx: ctx, handle: h, buf: newCBuffer(playbackBufBytes)}, nil
 }
 
 func (b *alsaBackend) OpenClockedOutput(ctx context.Context, rate, channels int) (echomuse.ClockedAudioOutput, error) {
@@ -217,7 +273,7 @@ func (b *alsaBackend) OpenClockedOutput(ctx context.Context, rate, channels int)
 		b.setError(err)
 		return nil, err
 	}
-	return &alsaClockedOutput{ctx: ctx, handle: h, rate: rate, channels: channels}, nil
+	return &alsaClockedOutput{ctx: ctx, handle: h, rate: rate, channels: channels, buf: newCBuffer(playbackBufBytes)}, nil
 }
 
 type alsaClockedOutput struct {
@@ -226,6 +282,8 @@ type alsaClockedOutput struct {
 	rate, channels int
 	mu             sync.Mutex
 	closed         bool
+	// buf is the C-side buffer the audio is copied through.
+	buf *cBuffer
 }
 
 func (o *alsaClockedOutput) NextPlaybackTime() (time.Time, time.Duration, error) {
@@ -248,6 +306,47 @@ func (o *alsaClockedOutput) NextPlaybackTime() (time.Time, time.Duration, error)
 	return time.Now().Add(time.Duration(frames) * time.Second / time.Duration(o.rate)), 250 * time.Microsecond, nil
 }
 
+// cbuf is the C-side buffer the audio is copied through.
+//
+// The audio is copied into C memory rather than handed over as a Go
+// pointer. A Go pointer passed to C is checked by the runtime, and the
+// check walks every element of it — so a large buffer costs a scan of the
+// whole buffer on every call. The copy is a few hundred kilobytes a
+// second and it is the same cost either way.
+type cBuffer struct {
+	ptr   unsafe.Pointer
+	slice []byte
+}
+
+// newCBuffer allocates a C-side buffer of n bytes.
+//
+// The buffer is C memory, and the Go slice over it is a view of that
+// memory — not a Go allocation. Copying into it copies into C memory, and
+// the pointer handed to C is a C pointer, so the runtime's pointer check
+// has nothing to walk.
+func newCBuffer(n int) *cBuffer {
+	if n <= 0 {
+		return &cBuffer{}
+	}
+	ptr := C.malloc(C.size_t(n))
+	if ptr == nil {
+		return &cBuffer{}
+	}
+	return &cBuffer{
+		ptr:   ptr,
+		slice: unsafe.Slice((*byte)(ptr), n),
+	}
+}
+
+// free releases the buffer.
+func (b *cBuffer) free() {
+	if b.ptr != nil {
+		C.free(b.ptr)
+		b.ptr = nil
+		b.slice = nil
+	}
+}
+
 func (o *alsaClockedOutput) Write(p []byte) (int, error) {
 	frameBytes := o.channels * 2
 	if len(p)%frameBytes != 0 {
@@ -263,7 +362,8 @@ func (o *alsaClockedOutput) Write(p []byte) (int, error) {
 		if err := o.ctx.Err(); err != nil {
 			return written, err
 		}
-		frames := C.em_alsa_write(&o.handle, unsafe.Pointer(&p[written]), C.ulong((len(p)-written)/frameBytes))
+		copy(o.buf.slice, p[written:])
+		frames := C.em_alsa_write(&o.handle, o.buf.ptr, C.ulong((len(p)-written)/frameBytes))
 		if frames < 0 {
 			if rc := C.em_alsa_recover(&o.handle, C.int(frames)); rc < 0 {
 				return written, alsaError(int(rc))
@@ -285,6 +385,7 @@ func (o *alsaClockedOutput) Close() error {
 		C.em_alsa_close(&o.handle)
 		o.closed = true
 	}
+	o.buf.free()
 	return nil
 }
 
@@ -293,6 +394,8 @@ type alsaCapture struct {
 	handle C.em_alsa
 	mu     sync.Mutex
 	closed bool
+	// buf is the C-side buffer the audio is read into.
+	buf *cBuffer
 }
 
 func (r *alsaCapture) Read(p []byte) (int, error) {
@@ -307,13 +410,14 @@ func (r *alsaCapture) Read(p []byte) (int, error) {
 	if r.closed {
 		return 0, io.EOF
 	}
-	frames := C.em_alsa_read(&r.handle, unsafe.Pointer(&p[0]), C.ulong(len(p)/2))
+	frames := C.em_alsa_read(&r.handle, r.buf.ptr, C.ulong(len(p)/2))
 	if frames < 0 {
 		if rc := C.em_alsa_recover(&r.handle, C.int(frames)); rc < 0 {
 			return 0, alsaError(int(rc))
 		}
 		return 0, nil
 	}
+	copy(p, r.buf.slice[:int(frames)*2])
 	return int(frames) * 2, nil
 }
 func (r *alsaCapture) Close() error {
@@ -323,6 +427,7 @@ func (r *alsaCapture) Close() error {
 		C.em_alsa_close(&r.handle)
 		r.closed = true
 	}
+	r.buf.free()
 	return nil
 }
 
@@ -331,6 +436,8 @@ type alsaPlayback struct {
 	handle C.em_alsa
 	mu     sync.Mutex
 	closed bool
+	// buf is the C-side buffer the audio is copied through.
+	buf *cBuffer
 }
 
 func (w *alsaPlayback) Write(p []byte) (int, error) {
@@ -347,7 +454,8 @@ func (w *alsaPlayback) Write(p []byte) (int, error) {
 	}
 	done := 0
 	for done < len(p) {
-		n := C.em_alsa_write(&w.handle, unsafe.Pointer(&p[done]), C.ulong((len(p)-done)/2))
+		copy(w.buf.slice, p[done:])
+		n := C.em_alsa_write(&w.handle, w.buf.ptr, C.ulong((len(p)-done)/2))
 		if n < 0 {
 			if rc := C.em_alsa_recover(&w.handle, C.int(n)); rc < 0 {
 				return done, alsaError(int(rc))
@@ -368,6 +476,7 @@ func (w *alsaPlayback) Close() error {
 		C.em_alsa_close(&w.handle)
 		w.closed = true
 	}
+	w.buf.free()
 	return nil
 }
 
@@ -387,3 +496,15 @@ func (w *alsaPlayback) Drain() error {
 func alsaError(code int) error {
 	return errors.New(C.GoString(C.strerror(C.int(-code))))
 }
+
+// The sizes of the C-side audio buffers.
+//
+// The capture buffer holds one capture frame — 100 ms at 16 kHz — and the
+// playback buffers hold one playback frame. They are sized in C memory so
+// that no Go pointer reaches the C code, which is both what the cgo rules
+// want and what keeps the runtime's pointer check from walking the whole
+// buffer on every call.
+const (
+	captureBufBytes  = 48000
+	playbackBufBytes = 48000 * 4
+)
