@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The credential shell is the default runner for the shell plane.
@@ -36,6 +37,19 @@ import (
 // runner that does not answer says nothing about itself, and the
 // controller has to guess.
 const decoderProbeReply = "DECODER:base64\nMD5:plain\nDESTDIR:ok\n__DETECT_DONE__\n"
+
+// CredentialShellRunner returns the shell plane that carries the
+// controller's credential transfer and nothing else.
+//
+// It is exported so an application that serves more than one plane can
+// compose them: the credential transfer, and the wake assets the
+// controller pushes, are two separate things a device needs.
+func CredentialShellRunner(dir string) ShellRunner {
+	if dir == "" {
+		dir = ControllerCredentialPath
+	}
+	return credentialShellRunner{dir: dir}
+}
 
 // credentialShellRunner serves the shell plane with the credential
 // transfer alone.
@@ -131,7 +145,15 @@ func (s *credentialShellSession) Write(p []byte) (int, error) {
 func (s *credentialShellSession) Close() error {
 	s.once.Do(func() {
 		close(s.quit)
-		<-s.finish
+		// The commands that have arrived are carried out first, but not
+		// for ever. The controller waits fifteen seconds for the device
+		// to dial the next shell session, and it dials it only after
+		// this one has closed — so a close that waits out a command
+		// costs the controller its whole timeout.
+		select {
+		case <-s.finish:
+		case <-time.After(closeDrainTimeout):
+		}
 
 		s.mu.Lock()
 		s.closed = true
@@ -140,6 +162,14 @@ func (s *credentialShellSession) Close() error {
 	})
 	return nil
 }
+
+// closeDrainTimeout bounds how long a close waits for the command in
+// flight.
+//
+// The firmware kills the shell process and does not wait for it. This is
+// the same idea: the command that is running is a command whose answer
+// nobody is going to read.
+const closeDrainTimeout = 2 * time.Second
 
 // run carries the commands out.
 //
@@ -188,7 +218,7 @@ func (s *credentialShellSession) process(chunk []byte) {
 		s.buffer.WriteString(rest)
 		if out != "" {
 			s.mu.Lock()
-			s.output.WriteString(out)
+			s.output.WriteString(FrameAnswer(out))
 			s.mu.Unlock()
 			s.ready.Broadcast()
 		}
@@ -212,8 +242,17 @@ func (s *credentialShellSession) execute(text string) (int, string, bool) {
 		return idx + end + 1, decoderProbeReply, true
 	}
 
+	// The directory the credential goes in. The controller makes it
+	// before it pushes anything, and a directory that is not there is a
+	// transfer that cannot land.
+	if cmd, state := parseMkdir(text); state == parseMatched {
+		return cmd.length, s.makeDirectory(cmd), true
+	} else if state == parseIncomplete {
+		return 0, "", false
+	}
+
 	// The file push, with the mode and the confirmation that follow it.
-	if cmd, state := parseTransfer(text); state == parseMatched {
+	if cmd, state := s.parseTransfer(text); state == parseMatched {
 		out, err := s.writeCredential(cmd)
 		if err != nil {
 			return cmd.length, refusalText(err), true
@@ -243,6 +282,57 @@ func (s *credentialShellSession) execute(text string) (int, string, bool) {
 		return 0, "", false
 	}
 	return len(text), refusalText(fmt.Errorf("this plane carries the credential transfer only")), true
+}
+
+// mkdirCommand is a directory the controller asks for.
+type mkdirCommand struct {
+	// path is the directory.
+	path string
+	// length is how much of the input the command used.
+	length int
+}
+
+// parseMkdir reads a directory the controller asks for.
+//
+// The controller makes the credential directory before it pushes anything
+// into it, and asks the question in the same round trip as the digest
+// check — so the answer has to say whether the directory is there.
+func parseMkdir(text string) (mkdirCommand, parseState) {
+	fields := shellFields(text)
+	if len(fields) < 2 || fields[0] != "mkdir" {
+		return mkdirCommand{}, parseNoMatch
+	}
+	// "mkdir -p PATH" — the flag is skipped.
+	path := fields[1]
+	for i, f := range fields {
+		if f == "-p" && i+1 < len(fields) {
+			path = fields[i+1]
+			break
+		}
+	}
+	lineEnd := strings.Index(text, "\n")
+	if lineEnd < 0 {
+		return mkdirCommand{}, parseIncomplete
+	}
+	return mkdirCommand{path: path, length: lineEnd + 1}, parseMatched
+}
+
+// makeDirectory makes the directory the credential goes in.
+//
+// The controller asks the question and reads the answer to see whether
+// the directory is there, so the answer names it.
+func (s *credentialShellSession) makeDirectory(cmd mkdirCommand) string {
+	clean := filepath.Clean(unquotePath(cmd.path))
+	// Only the credential directory is made. A plane that could make a
+	// directory anywhere on the device could make a directory anywhere
+	// on the device.
+	if clean != ControllerCredentialPath && clean != s.dir {
+		return refusalText(fmt.Errorf("%s is outside the credential directory", cmd.path))
+	}
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return refusalText(fmt.Errorf("the credential directory could not be created: %w", err))
+	}
+	return "DESTDIR:ok\n"
 }
 
 // refusalText is what the runner answers to a command it does not carry
@@ -294,7 +384,7 @@ type transferCommand struct {
 // The decoder may be `base64`, `busybox base64` or a python one-liner, and
 // the redirect may come before or after the heredoc, so the command is
 // taken apart by what is in it rather than by its exact order.
-func parseTransfer(text string) (transferCommand, parseState) {
+func (s *credentialShellSession) parseTransfer(text string) (transferCommand, parseState) {
 	idx := strings.Index(text, "base64")
 	if idx < 0 {
 		return transferCommand{}, parseNoMatch
@@ -331,22 +421,48 @@ func parseTransfer(text string) (transferCommand, parseState) {
 	command := after[:lineEnd]
 	body := after[lineEnd+1:]
 	terminator := "\n" + delim + "\n"
-	stop := strings.Index(body, terminator)
+	// Only the TAIL of the body is searched. The delimiter ends the
+	// body, so it cannot be anywhere else in it — and the controller
+	// sends a transfer line by line, so searching all of it on every
+	// line is quadratic in the size of the transfer.
+	stop := -1
+	if len(body) <= fullScanLimit {
+		stop = strings.Index(body, terminator)
+	} else {
+		window := len(terminator)
+		if window > len(body) {
+			window = len(body)
+		}
+		tail := body[len(body)-window:]
+		if found := strings.Index(tail, terminator); found >= 0 {
+			stop = len(body) - window + found
+		}
+	}
 	if stop < 0 {
 		return transferCommand{}, parseIncomplete
 	}
 	payload := body[:stop]
 	tail := body[stop+len(terminator):]
 
-	data, err := base64.StdEncoding.DecodeString(stripWhitespace(payload))
-	if err != nil {
-		return transferCommand{}, parseNoMatch
-	}
-
 	// The destination is named by the redirect, which may come before or
 	// after the heredoc.
 	dest, ok := parseRedirectDest(text[:idx+open], command)
 	if !ok {
+		return transferCommand{}, parseNoMatch
+	}
+
+	// The destination is checked BEFORE the body is decoded.
+	//
+	// The body is the largest thing on the wire — a multi-megabyte model
+	// is megabytes of base64 — and decoding it allocates all of it. A
+	// transfer to a path this plane does not carry is refused, and
+	// refusing it must not cost the machine a copy of the body.
+	if !s.carriesPath(dest) {
+		return transferCommand{}, parseNoMatch
+	}
+
+	data, err := base64.StdEncoding.DecodeString(stripWhitespace(payload))
+	if err != nil {
 		return transferCommand{}, parseNoMatch
 	}
 
@@ -403,6 +519,32 @@ func parseRedirectDest(before, after string) (string, bool) {
 	return "", false
 }
 
+// carriesPath reports whether this plane carries the file at a path.
+//
+// Only the two credential files are carried. A transfer to anything else
+// is not this plane's, and it is refused before its body is decoded —
+// the body is the largest thing on the wire, and a plane that decodes
+// what it will refuse holds a megabyte of base64 for nothing.
+func (s *credentialShellSession) carriesPath(path string) bool {
+	clean := filepath.Clean(unquotePath(path))
+	if strings.HasSuffix(clean, ".part") {
+		clean = strings.TrimSuffix(clean, ".part")
+	}
+	name := filepath.Base(clean)
+	if name != "token" && name != "ca.pem" {
+		return false
+	}
+	for _, candidate := range []string{
+		filepath.Join(ControllerCredentialPath, name),
+		filepath.Join(s.dir, name),
+	} {
+		if clean == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 // chmodCommand is the mode the controller asks for on a file it pushed.
 type chmodCommand struct {
 	// path is the file the mode is for.
@@ -420,6 +562,11 @@ type chmodCommand struct {
 // The controller sets the mode on the line after the heredoc, and a
 // controller that sends that line in a frame of its own is still asking
 // for the mode.
+//
+// The mode and the path are in the order the shell takes them:
+// "chmod MODE PATH". A controller that writes them the other way round
+// is read as the other way round, because an octal mode and a path are
+// each recognisable on their own.
 func parseChmod(text string) (chmodCommand, parseState) {
 	fields := shellFields(text)
 	if len(fields) < 2 || fields[0] != "chmod" {
@@ -430,9 +577,36 @@ func parseChmod(text string) (chmodCommand, parseState) {
 		return chmodCommand{}, parseIncomplete
 	}
 
-	cmd := chmodCommand{path: fields[1], length: lineEnd + 1}
-	cmd.mode, cmd.marker = parseModeAndMarker(text[:lineEnd])
+	cmd := chmodCommand{length: lineEnd + 1}
+	// The mode is the octal one and the path is the other. The shell
+	// takes "chmod MODE PATH", so that is the order read first.
+	if validFileMode(fields[1]) {
+		cmd.mode = fields[1]
+		if len(fields) > 2 {
+			cmd.path = fields[2]
+		}
+	} else {
+		cmd.path = fields[1]
+		if len(fields) > 2 {
+			cmd.mode = fields[2]
+		}
+	}
+	cmd.marker = markerFrom(text[:lineEnd])
 	return cmd, parseMatched
+}
+
+// markerFrom reads the marker a command asks to have echoed back.
+//
+// The controller asks for it with "echo MARKER", and the marker is what
+// tells it the command ran.
+func markerFrom(line string) string {
+	fields := shellFields(line)
+	for i, f := range fields {
+		if f == "echo" && i+1 < len(fields) {
+			return strings.Trim(fields[i+1], `"'`)
+		}
+	}
+	return ""
 }
 
 // parseModeAndMarker reads the mode and the confirmation marker out of
@@ -478,8 +652,15 @@ type verifyCommand struct {
 //
 //	GOT=$(md5sum PATH 2>/dev/null | cut -d' ' -f1);
 //	case "$GOT" in <md5>*) mv PATH.part PATH && echo VERIFY_OK ;;
+//
+// The md5 tool may be named with a prefix — the controller probes for
+// "busybox md5sum" before it settles on a plain "md5sum" — so the path
+// is looked for after the tool rather than at a fixed place.
 func parseVerify(text string) (verifyCommand, parseState) {
-	if !strings.HasPrefix(text, "GOT=$(md5sum") {
+	if !strings.HasPrefix(text, "GOT=$(") {
+		return verifyCommand{}, parseNoMatch
+	}
+	if !strings.Contains(text, "md5sum") {
 		return verifyCommand{}, parseNoMatch
 	}
 	if !strings.Contains(text, "esac") {
@@ -491,7 +672,7 @@ func parseVerify(text string) (verifyCommand, parseState) {
 		return verifyCommand{}, parseNoMatch
 	}
 
-	cmd := verifyCommand{part: fields[1], length: len(text)}
+	cmd := verifyCommand{length: len(text)}
 	for i, f := range fields {
 		switch {
 		case f == "in" && i+1 < len(fields):
@@ -502,10 +683,31 @@ func parseVerify(text string) (verifyCommand, parseState) {
 			cmd.marker = fields[i+1]
 		}
 	}
-	if cmd.dest == "" {
+	// The file is the one the digest is taken of. It follows the md5
+	// tool, which may be named with a prefix — the controller probes for
+	// "busybox md5sum" before it settles on a plain "md5sum".
+	cmd.part = pathAfterMd5(text)
+	if cmd.dest == "" || cmd.part == "" {
 		return verifyCommand{}, parseNoMatch
 	}
 	return cmd, parseMatched
+}
+
+// pathAfterMd5 is the path the digest is taken of.
+//
+// The md5 tool may be named with a prefix, so the path is the word after
+// the tool rather than at a fixed place.
+func pathAfterMd5(text string) string {
+	idx := strings.Index(text, "md5sum")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimLeft(text[idx+len("md5sum"):], " \t")
+	end := strings.IndexAny(rest, " \t")
+	if end < 0 {
+		return ""
+	}
+	return strings.Trim(rest[:end], `"'`)
 }
 
 // writeCredential stores the file the controller pushed.
