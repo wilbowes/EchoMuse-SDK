@@ -177,6 +177,125 @@ the SDK logs a warning about when the shell starts, or supply a
 `ShellRunner` that implements only the operations you intend to expose.
 See [security review](security.md).
 
+## Device facts and telemetry
+
+The SDK carries the facts a device has about itself and the seams through
+which an application supplies them. It does not measure anything, read any
+file, or ask any operating system anything: an application that knows its
+hardware fills the seams in, and the SDK puts them on the wire.
+
+Everything here follows one rule: **a missing measurement is absent, never
+zero.** The controller stores an absent measurement as NULL and a measured
+zero as a number, and those are different answers. A device that cannot
+read its own temperature reports no temperature; it does not report 0 °C.
+
+### What the device declares at registration
+
+| Field | What it is |
+|---|---|
+| `Version` | The application's own version. |
+| `FirmwareVersion` | The firmware version the controller compares against the published releases. Empty means `Version`. |
+| `Board` | The hardware id. The controller names the model in Home Assistant from it. |
+| `BootID` | The kernel's `/proc/sys/kernel/random/boot_id`. The controller keeps one row per boot, so this is what tells a restart from a reconnect. |
+| `BootReason` | Why the device started. |
+| `KernelArch`, `KernelRelease` | The running kernel's `uname -m` and `uname -r`. |
+| `EMMC` | The flash wear report. The keys the controller reads are `rev`, `preEol`, `lifeA`, `lifeB`, `name`, `date` and `manfid`. |
+
+```go
+device, err := echomuse.New(echomuse.Options{
+	DeviceID:       "panel-0001",
+	Version:        "0.1.0",
+	FirmwareVersion: "v999.0.0",   // the controller will not offer an update
+	Board:          "home-panel",
+	BootID:         readBootID(),
+	BootReason:     "power_key",
+	KernelArch:     "aarch64",
+	KernelRelease:  "6.1.0",
+	EMMC: map[string]any{
+		"rev": 7, "preEol": 1, "lifeA": 1, "lifeB": 2,
+		"name": "FJ25AB", "date": "08/2017", "manfid": "0x000015",
+	},
+	Capabilities:   []protocol.Capability{protocol.CapMic, protocol.CapSpeaker},
+	ControllerURL:  controllerURL,
+	CredentialsDir: credentialsDir,
+})
+```
+
+**`FirmwareVersion` and `Version` are separate on purpose.** The controller
+compares the version a device reports against the published firmware
+releases and offers an update when the device is behind. A device the
+controller cannot update — a panel, a box on a desk, anything that is not an
+Echo — still has to answer that question, and the honest answer is the
+version it is on. A device that leaves `FirmwareVersion` empty reports
+`Version`, which is right for a device whose firmware *is* the application.
+
+### The telemetry
+
+`StatsSource` is called on a ticker and its reading is sent as the stats
+message. It is a source and not a report: the SDK does not know what a CPU
+percentage is.
+
+```go
+device, err := echomuse.New(echomuse.Options{
+	// ...
+	StatsInterval: 30 * time.Second,
+	StatsSource: func() protocol.Stats {
+		return protocol.Stats{
+			CPUPct:        cpuShare(),
+			MemUsedMb:     memoryUsed(),
+			MemTotalMb:    memoryTotal(),
+			StorageUsedMb: storageUsed(),
+			StorageTotalMb: storageTotal(),
+			WifiRssi:      signalStrength(),   // a pointer: nil means not measured
+			WifiSsid:      "home",
+			LinkSpeedMbps: linkSpeed(),
+			CPUTempC:      cpuTemperature(),
+			CoresOnline:   &coresOnline,
+			CoresTotal:    &coresTotal,
+			EMMC:          flashWear(),
+		}
+	},
+})
+```
+
+The pointer fields are the ones where zero is a real reading: a signal
+strength of 0 dBm is a different answer from no signal reading at all, and
+the controller shows one as "no signal" and the other as a number.
+
+`Device.Stats()` returns the current reading without waiting for the tick,
+which is what an application wants for its own display.
+
+The full set of fields is in `protocol.Stats`. `EMMC` rides there too, so
+the flash wear is re-read on the device every few hours and the controller
+stores one row per day on a change.
+
+### The microphone mute
+
+Mute is **device-sovereign**. The device holds the authority and the
+controller is told; there is no controller-to-device mute command and there
+is not going to be one.
+
+```go
+// The device's own switch changed.
+if err := device.SendMicMute(muted); err != nil {
+	log.Error("the mute could not be reported", "error", err)
+}
+```
+
+`SendMicMute` reports the state to the controller and calls the
+`OnMicMute` handlers, so an application that drives its own switch has one
+call to make and one place to be told.
+
+```go
+device.OnMicMute(func(muted bool) {
+	// The device's own state has changed. Stop or open the capture.
+})
+```
+
+This is the **microphone**'s mute. The controller mutes a device's
+*output* by sending a volume of zero, which is a different thing entirely
+and arrives as `OnVolumeSet`.
+
 ## Capabilities and state
 
 Capabilities are declarations of implemented behavior, not feature requests.

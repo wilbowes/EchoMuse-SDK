@@ -416,9 +416,9 @@ The protocol has more in it than V1 of the SDK uses:
   not never sees a GATT frame.
 - **Sendspin** — the multi-room player. The device reports its status and
   answers a token request.
-- **WiFi** — the controller can ask a device to scan and to change network.
 - **Firmware updates** — the controller pushes a binary and the device
   restarts into it. An Echo-specific flow with a rollback slot.
 
 None of them are things a non-Echo device needs to be a voice satellite, and
 all of them are gated on capabilities this SDK does not announce.
+

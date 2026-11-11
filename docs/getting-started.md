@@ -478,6 +478,82 @@ device.SendStats(protocol.Stats{
 })
 ```
 
+Rather than sending that yourself on a timer, hand the SDK a source and it
+sends it for you:
+
+```go
+device, err := echomuse.New(echomuse.Options{
+	// ...
+	StatsInterval: 30 * time.Second,
+	StatsSource: func() protocol.Stats {
+		return protocol.Stats{
+			CPUPct:     cpuShare(),
+			MemUsedMb:  memoryUsed(),
+			MemTotalMb: memoryTotal(),
+			// A pointer, because a signal strength of zero and no signal
+			// reading are different answers.
+			WifiRssi: signalStrength(),
+		}
+	},
+})
+```
+
+`Device.Stats()` gives the current reading without waiting for the tick.
+
+## 13. Say what device this is
+
+The controller shows the device's version, keeps one row per boot rather
+than per redial, and records the flash wear. It is all in the registration,
+and the SDK puts it there from the options:
+
+```go
+device, err := echomuse.New(echomuse.Options{
+	DeviceID:        "panel-0001",
+	Version:         "0.1.0",
+	FirmwareVersion: "v999.0.0",
+	Board:           "home-panel",
+	BootID:          readBootID(),
+	BootReason:      "power_key",
+	KernelArch:      "aarch64",
+	KernelRelease:   "6.1.0",
+	EMMC: map[string]any{
+		"rev": 7, "preEol": 1, "lifeA": 1, "lifeB": 2,
+		"name": "FJ25AB", "date": "08/2017", "manfid": "0x000015",
+	},
+	// ...
+})
+```
+
+**`FirmwareVersion` is separate from `Version` on purpose.** The controller
+compares the reported version against the published firmware releases and
+offers an update when the device is behind. A device the controller cannot
+update — a panel, a box on a desk, anything that is not an Echo — still has
+to answer that question, and the honest answer is the version it is on.
+
+## 14. Own the microphone mute
+
+Mute is the device's. The device holds the authority, the controller is
+told, and there is no controller-to-device mute command.
+
+```go
+// The device's own switch changed.
+if err := device.SendMicMute(muted); err != nil {
+	log.Error("the mute could not be reported", "error", err)
+}
+```
+
+`SendMicMute` reports the state to the controller and calls the
+`OnMicMute` handlers, so one call covers both directions:
+
+```go
+device.OnMicMute(func(muted bool) {
+	// Stop or open the capture.
+})
+```
+
+The controller mutes a device's *output* by sending a volume of zero,
+which arrives as `OnVolumeSet` and is a different thing entirely.
+
 ## Where the wake word runs
 
 This is the one decision with a privacy consequence, so it is worth being
@@ -578,3 +654,10 @@ mock.IssueCredential("token", caPEM)
 - [ ] The shell plane is served, or the credential path is mapped.
 - [ ] The controller's credential path is mapped to wherever the device
       keeps its state.
+- [ ] The device declares its boot id, so a restart is distinguishable
+      from a reconnect.
+- [ ] The reported version is one the controller can act on: a device it
+      cannot update reports the version it is on.
+- [ ] A measurement the device cannot take is left out, not reported as
+      zero.
+- [ ] The microphone mute is the device's, and the controller is told.

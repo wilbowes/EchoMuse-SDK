@@ -158,6 +158,10 @@ separate pending device.
 | `--allow-shell` | off | Let the controller run commands as the emulator process. Use only with a controller you trust. |
 | `--no-window` | off | Do not start the HTTP UI or open a browser. |
 | `--log-level LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
+| `--firmware-version VERSION` | `v999.0.0` | The firmware version reported to the controller. The default is ahead of every published release, so the controller does not offer an update the emulator cannot take. |
+| `--boot-id ID` | the kernel's | The boot id reported at registration. |
+| `--boot-reason REASON` | empty | Why the device started. |
+| `--stats-interval DURATION` | `30s` | How often the telemetry is reported. |
 
 List devices first if the default audio devices are wrong:
 
@@ -182,6 +186,57 @@ The window also provides a 0–100 speaker volume slider and a microphone mute
 toggle. Volume scales playback PCM and reports changes to the controller. Mute
 closes capture and reports the device-owned mute state; while muted, a new
 controller microphone request is ignored.
+
+The window carries a diagnostics panel showing what the emulator is
+reporting: the boot id, the kernel, the firmware version and the current
+telemetry. It is the quickest way to see what a
+device told the controller, and the telemetry there is exactly what goes on
+the wire.
+
+---
+
+## The device the emulator is
+
+The emulator is the SDK's complete device: everything a device has to
+answer for, answered in full against the machine it runs on. It is the
+reference for what an integrator writes, and the emulator's own source is
+the worked example.
+
+**The telemetry** is this machine's own measurements: the processor's share
+of the time, the process's memory, the filesystem it is running on, the
+flash wear from `/sys/class/mmc_host`, and the network. What the machine
+cannot be asked for is left out rather than zeroed — a missing measurement
+and a measured zero are different answers, and the controller stores them
+differently.
+
+**The boot facts** are the kernel's boot id, the kernel's architecture and
+release, and the flash wear. The controller keeps one row per boot, so a
+device that does not send its boot id cannot tell the controller that it
+restarted rather than reconnected.
+
+**The microphone mute** is the device's own. The window's toggle closes the
+capture and reports the state; the controller is told and never asks.
+
+**The firmware version** is `v999.0.0` by default, because the controller
+compares it against the published releases and offers an update when the
+device is behind. The emulator is not an Echo and has no update slot, so
+reporting a version behind a release would have the controller offering it
+something it cannot take.
+
+### Writing a device against the SDK
+
+The emulator's source is the reference. The seams an application fills in
+are the ones the SDK does not implement:
+
+| Seam | The application supplies |
+|---|---|
+| `Options.StatsSource` | The telemetry reading. |
+| `Options.BootID`, `BootReason`, `KernelArch`, `KernelRelease`, `EMMC` | The boot facts. |
+| `Options.FirmwareVersion` | The version the controller compares. |
+| `OnMicMute` | What the device does when its own mute changes. |
+
+Everything else — the connection, the registration, the reconnects, the
+credentials, the state, the audio — is the SDK's.
 
 ---
 
@@ -315,8 +370,11 @@ the room is silent, or the chosen device is the wrong one.
 ## What it announces
 
 ```go
-mic, speaker, buttons, button_hold, pairing
+mic, speaker, buttons, button_hold, pairing, sendspin
 ```
+
+And `oww_local_only` and `oww_trigger` when it is running with a local
+wake model.
 
 Not `leds` or `led_anim`: it has a window rather than a ring, and it draws
 the state rather than the pixels. Announcing a ring it does not have would
