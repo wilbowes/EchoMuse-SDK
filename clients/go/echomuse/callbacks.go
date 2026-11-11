@@ -155,6 +155,24 @@ func (d *Device) OnSendspinTokenRequest(fn func()) {
 	d.callbacksMu.Unlock()
 }
 
+func (d *Device) emitWifiScan() {
+	d.callbacksMu.RLock()
+	fns := append([]func(){}, d.onWifiScan...)
+	d.callbacksMu.RUnlock()
+	for _, fn := range fns {
+		fn()
+	}
+}
+
+func (d *Device) emitWifiChange(c protocol.WifiChange) {
+	d.callbacksMu.RLock()
+	fns := append([]func(protocol.WifiChange){}, d.onWifiChange...)
+	d.callbacksMu.RUnlock()
+	for _, fn := range fns {
+		fn(c)
+	}
+}
+
 func (d *Device) emitListenAck(session uint32) {
 	d.callbacksMu.RLock()
 	fns := append([]func(uint32){}, d.onListenAck...)
@@ -176,6 +194,52 @@ func (d *Device) emitListenClose(m protocol.ListenClose) {
 func (d *Device) emitSendspinTokenRequest() {
 	d.callbacksMu.RLock()
 	fns := append([]func(){}, d.onSendspinTokenRequest...)
+	d.callbacksMu.RUnlock()
+	for _, fn := range fns {
+		fn()
+	}
+}
+
+// OnWifiScan registers a handler for the controller asking the device to
+// scan for networks.
+//
+// The handler answers with SendWifiScanResult. A device that cannot scan
+// answers with an error rather than staying silent, because the controller
+// waits for the answer and cannot tell a silent device from a busy one.
+func (d *Device) OnWifiScan(fn func()) {
+	d.callbacksMu.Lock()
+	d.onWifiScan = append(d.onWifiScan, fn)
+	d.callbacksMu.Unlock()
+}
+
+// OnWifiChange registers a handler for the controller asking the device to
+// join another network.
+//
+// The handler answers with SendWifiResult. The controller re-asks until it
+// acknowledges the answer with a commit, so a device that failed the change
+// must say so rather than go quiet.
+func (d *Device) OnWifiChange(fn func(change protocol.WifiChange)) {
+	d.callbacksMu.Lock()
+	d.onWifiChange = append(d.onWifiChange, fn)
+	d.callbacksMu.Unlock()
+}
+
+// OnWifiCommit registers a handler for the controller acknowledging a
+// network change.
+//
+// It is the end of the exchange: the controller records the outcome and
+// acknowledges it, and a device that has been repeating its result stops.
+// A device that never hears the commit keeps the result ready to send
+// again.
+func (d *Device) OnWifiCommit(fn func()) {
+	d.callbacksMu.Lock()
+	d.onWifiCommit = append(d.onWifiCommit, fn)
+	d.callbacksMu.Unlock()
+}
+
+func (d *Device) emitWifiCommit() {
+	d.callbacksMu.RLock()
+	fns := append([]func(){}, d.onWifiCommit...)
 	d.callbacksMu.RUnlock()
 	for _, fn := range fns {
 		fn()

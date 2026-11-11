@@ -163,6 +163,26 @@ func (d *Device) SendMuteState(muted bool) error {
 	return d.sendControl(protocol.MuteState{Type: protocol.TypeMuteState, Muted: muted})
 }
 
+// SendWifiScanResult answers the controller's scan request.
+//
+// A device that cannot scan sends the error rather than nothing: the
+// controller waits for this message and gives up after a timeout, and a
+// silent device cannot be told apart from a busy one.
+func (d *Device) SendWifiScanResult(result protocol.WifiScanResult) error {
+	result.Type = protocol.TypeWifiScanResult
+	return d.sendControl(result)
+}
+
+// SendWifiResult answers the controller's network change.
+//
+// The controller re-asks until it acknowledges the answer with a commit,
+// so a device whose change failed must say so rather than go quiet. A
+// failed change that is not reported leaves the controller waiting.
+func (d *Device) SendWifiResult(result protocol.WifiResult) error {
+	result.Type = protocol.TypeWifiResult
+	return d.sendControl(result)
+}
+
 // SendVolumeState reports a volume change, which the controller persists as
 // the device's startup volume.
 func (d *Device) SendVolumeState(level int) error {

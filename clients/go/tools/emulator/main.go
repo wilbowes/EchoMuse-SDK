@@ -57,6 +57,17 @@ import (
 	"github.com/wilbowes/EchoMuse-SDK/clients/go/tools/emulator/audio"
 )
 
+// currentNetwork reports the network this machine is on.
+//
+// It is the same answer the scanner gives, read once at start rather than
+// on every tick: the telemetry wants the name and the signal, and the
+// signal changes slowly.
+func currentNetwork() (string, *int, error) {
+	scanner := emulator.NMCLIScanner{}
+	ssid, _, signal, err := scanner.Current()
+	return ssid, signal, err
+}
+
 func main() {
 	var (
 		controller      = flag.String("controller", "", "the controller's URL, e.g. ws://192.168.1.10:8767. Empty finds it by mDNS.")
@@ -81,6 +92,7 @@ func main() {
 		bootID          = flag.String("boot-id", "", "the boot id to report. Empty reads the kernel's.")
 		bootReason      = flag.String("boot-reason", "", "why the device started.")
 		statsInterval   = flag.Duration("stats-interval", 30*time.Second, "how often the telemetry is reported.")
+		noWifi          = flag.Bool("no-wifi", false, "answer the controller's network questions with an error, as a device with no network stack does.")
 	)
 	flag.Parse()
 
@@ -144,6 +156,18 @@ func main() {
 	totalMb, usedMb := emulator.ReadStorage("/")
 	telemetry.StorageTotalMb = totalMb
 	telemetry.StorageUsedMb = usedMb
+	if network, signal, err := currentNetwork(); err == nil {
+		telemetry.WiFiSSID = network
+		telemetry.WiFiRSSI = signal
+	}
+
+	// A machine with no radio answers the controller's network questions
+	// with an error, which is the honest answer and the one that tells an
+	// operator the device has no radio rather than that a scan timed out.
+	var scanner emulator.WifiScanner
+	if *noWifi {
+		scanner = emulator.NoWifiScanner{}
+	}
 
 	emu, err := emulator.New(emulator.Options{
 		ControllerURL:     *controller,
@@ -160,6 +184,7 @@ func main() {
 		BootID:            *bootID,
 		BootReason:        *bootReason,
 		StatsInterval:     *statsInterval,
+		Scanner:           scanner,
 	})
 	if err != nil {
 		log.Error("the emulator could not start", "error", err)

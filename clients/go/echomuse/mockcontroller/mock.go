@@ -105,6 +105,15 @@ type Controller struct {
 	// stats are the telemetry reports the device sent, in order.
 	stats []protocol.Stats
 
+	// muteStates are the mute reports the device sent, in order.
+	muteStates []protocol.MuteState
+	// volumeStates are the volume reports the device sent, in order.
+	volumeStates []protocol.VolumeState
+	// wifiScans are the scan results the device sent, in order.
+	wifiScans []protocol.WifiScanResult
+	// wifiResults are the network change outcomes the device sent.
+	wifiResults []protocol.WifiResult
+
 	micFrames      int
 	speakerFrames  int
 	vadEnds        int
@@ -189,6 +198,34 @@ func (c *Controller) Stats() []protocol.Stats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]protocol.Stats{}, c.stats...)
+}
+
+// MuteStates returns the mute reports the device sent, in order.
+func (c *Controller) MuteStates() []protocol.MuteState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.MuteState{}, c.muteStates...)
+}
+
+// VolumeStates returns the volume reports the device sent, in order.
+func (c *Controller) VolumeStates() []protocol.VolumeState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.VolumeState{}, c.volumeStates...)
+}
+
+// WifiScans returns the scan results the device sent, in order.
+func (c *Controller) WifiScans() []protocol.WifiScanResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.WifiScanResult{}, c.wifiScans...)
+}
+
+// WifiResults returns the network change outcomes the device sent.
+func (c *Controller) WifiResults() []protocol.WifiResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.WifiResult{}, c.wifiResults...)
 }
 
 // DeviceID returns the id the device registered as.
@@ -352,6 +389,34 @@ func (c *Controller) handleControl(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &st) == nil {
 				c.mu.Lock()
 				c.stats = append(c.stats, st)
+				c.mu.Unlock()
+			}
+		case protocol.TypeMuteState:
+			var m protocol.MuteState
+			if json.Unmarshal(data, &m) == nil {
+				c.mu.Lock()
+				c.muteStates = append(c.muteStates, m)
+				c.mu.Unlock()
+			}
+		case protocol.TypeVolumeState:
+			var v protocol.VolumeState
+			if json.Unmarshal(data, &v) == nil {
+				c.mu.Lock()
+				c.volumeStates = append(c.volumeStates, v)
+				c.mu.Unlock()
+			}
+		case protocol.TypeWifiScanResult:
+			var w protocol.WifiScanResult
+			if json.Unmarshal(data, &w) == nil {
+				c.mu.Lock()
+				c.wifiScans = append(c.wifiScans, w)
+				c.mu.Unlock()
+			}
+		case protocol.TypeWifiResult:
+			var w protocol.WifiResult
+			if json.Unmarshal(data, &w) == nil {
+				c.mu.Lock()
+				c.wifiResults = append(c.wifiResults, w)
 				c.mu.Unlock()
 			}
 		}

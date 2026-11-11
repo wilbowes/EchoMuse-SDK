@@ -447,6 +447,17 @@ func (d *Device) handleControl(p *plane, raw []byte) {
 		if json.Unmarshal(raw, &m) == nil {
 			d.emitConfig(m)
 		}
+	case protocol.TypeWifiScan:
+		d.emitWifiScan()
+	case protocol.TypeWifiChange:
+		var m protocol.WifiChange
+		if json.Unmarshal(raw, &m) == nil {
+			d.emitWifiChange(m)
+		}
+	case protocol.TypeWifiCommit:
+		// The controller has acknowledged a network change, which is
+		// what lets the device stop repeating its result.
+		d.emitWifiCommit()
 	case protocol.TypeSendspinTokenRequest:
 		d.emitSendspinTokenRequest()
 	case protocol.TypePing:

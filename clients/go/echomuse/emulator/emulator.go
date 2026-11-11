@@ -63,6 +63,12 @@ type Options struct {
 	// zero value uses the defaults.
 	TurnConfig vad.Config
 
+	// Scanner is how the emulator scans for networks.
+	//
+	// It is nil by default, which uses NetworkManager's nmcli. A machine
+	// with no nmcli answers that it cannot scan.
+	Scanner WifiScanner
+
 	// Telemetry is the source of the periodic report.
 	//
 	// It is the emulator's own measurements of the machine it runs on:
@@ -140,6 +146,16 @@ type Emulator struct {
 	steps               []Step
 	listeners           []func()
 
+	// scanner answers the controller's questions about the network.
+	scanner WifiScanner
+	// wifiChange is the network the controller asked for.
+	wifiChange *protocol.WifiChange
+	// wifiResult is the outcome waiting to be acknowledged.
+	wifiResult *protocol.WifiResult
+	// wifiResultSent says the outcome has been sent since the last
+	// commit. The controller re-asks until it acknowledges it.
+	wifiResultSent bool
+
 	// bootID identifies this boot of the machine.
 	bootID string
 	// bootReason says why the machine started.
@@ -212,7 +228,12 @@ func New(opts Options) (*Emulator, error) {
 		volume:         50,
 		duckDB:         -18,
 		localWake:      opts.LocalWake,
+		scanner:        opts.Scanner,
 	}
+	if e.scanner == nil {
+		e.scanner = NMCLIScanner{}
+	}
+
 	// The boot facts, read from this machine. The kernel's arch and
 	// release are informational; the boot id is what the controller keeps
 	// a row per.
@@ -355,6 +376,9 @@ func New(opts Options) (*Emulator, error) {
 	})
 	device.OnVolumeSet(func(level int) { e.setVolume(level) })
 	device.OnListenAck(func(session uint32) { e.log.Info("private wake accepted", "session", session) })
+	device.OnWifiScan(func() { e.scanWifi() })
+	device.OnWifiChange(func(change protocol.WifiChange) { e.changeWifi(change) })
+	device.OnWifiCommit(func() { e.SetWifiCommit() })
 	device.OnListenClose(func(m protocol.ListenClose) { e.localListenClosed(m) })
 	device.OnSendspinTokenRequest(func() { e.sendSendspinToken() })
 	device.OnLog(func(level, message string) {

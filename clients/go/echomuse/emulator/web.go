@@ -61,6 +61,8 @@ type view struct {
 	// FirmwareVersion is the version the controller compares against the
 	// published releases.
 	FirmwareVersion string `json:"firmware_version,omitempty"`
+	// Network is the network the machine is on.
+	Network string `json:"network,omitempty"`
 	// Telemetry is the current reading.
 	Telemetry any `json:"telemetry,omitempty"`
 	// ControllerURL is the controller it is joining.
