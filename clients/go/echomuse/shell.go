@@ -168,12 +168,23 @@ func (d *Device) openShell(pty bool) {
 	// the second request leaves the controller waiting on a session that
 	// never arrives, and it reports that as the device having no shell at
 	// all.
-	if old != nil {
-		old.close()
+	//
+	// The old session is closed in the BACKGROUND, and the new one is
+	// dialled at once. This is what the firmware does, and the reason
+	// matters: a session that is closing waits for the command it is
+	// carrying out to finish, and a command that is carrying a transfer
+	// is worth a moment of its own. The controller waits fifteen seconds
+	// for the device to dial the next session, and a device that spends
+	// those fifteen seconds tidying up the last one never dials in time.
+	closeOld := func() {
+		if old != nil {
+			go old.close()
+		}
 	}
 
 	if link.Host == "" {
 		d.log.Warn("the controller asked for a shell before the link was up")
+		closeOld()
 		return
 	}
 
@@ -214,6 +225,7 @@ func (d *Device) openShell(pty bool) {
 		conn, err := d.dialShell(ctx, link, creds, pty)
 		if err != nil {
 			d.log.Warn("the shell connection failed", "error", err)
+			closeOld()
 			return
 		}
 
@@ -221,6 +233,7 @@ func (d *Device) openShell(pty bool) {
 		if err != nil {
 			d.log.Warn("cannot start a shell session", "error", err)
 			conn.Close()
+			closeOld()
 			return
 		}
 
