@@ -296,6 +296,51 @@ This is the **microphone**'s mute. The controller mutes a device's
 *output* by sending a volume of zero, which is a different thing entirely
 and arrives as `OnVolumeSet`.
 
+### The network
+
+The controller can ask a device to scan for networks and to join one. The
+SDK carries the exchange and the application answers it.
+
+```go
+device.OnWifiScan(func() {
+	// The controller wants to know what is in range.
+	networks, err := scanForNetworks()
+	if err != nil {
+		// Say so. The controller waits for this answer and gives up
+		// after a timeout, and a silent device cannot be told apart
+		// from a busy one.
+		_ = device.SendWifiScanResult(protocol.WifiScanResult{Error: err.Error()})
+		return
+	}
+	_ = device.SendWifiScanResult(protocol.WifiScanResult{Networks: networks})
+})
+
+device.OnWifiChange(func(change protocol.WifiChange) {
+	// The controller wants the device on another network.
+	err := joinNetwork(change.SSID, change.PSK)
+	result := protocol.WifiResult{SSID: change.SSID}
+	if err != nil {
+		result.Error = err.Error()
+	} else {
+		result.OK = true
+	}
+	_ = device.SendWifiResult(result)
+})
+
+device.OnWifiCommit(func() {
+	// The controller has recorded the outcome. The device can stop
+	// repeating its result.
+})
+```
+
+The result is re-sent until the commit arrives, because a network change
+kills the connection the answer would have travelled on. An SSID is 0–32
+arbitrary bytes, so `SSIDHex` is the addressable form and it is what the
+controller sends back for a network that came from a scan.
+
+The PSK is a secret. It arrives over the control plane and an application
+that logs its messages must not log this one.
+
 ## Capabilities and state
 
 Capabilities are declarations of implemented behavior, not feature requests.

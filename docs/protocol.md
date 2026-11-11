@@ -422,3 +422,11 @@ The protocol has more in it than V1 of the SDK uses:
 None of them are things a non-Echo device needs to be a voice satellite, and
 all of them are gated on capabilities this SDK does not announce.
 
+**WiFi is spoken.** The controller can ask a device to scan for networks
+and to change network, and the SDK carries that exchange: `OnWifiScan`,
+`OnWifiChange` and `OnWifiCommit` on the way in, `SendWifiScanResult` and
+`SendWifiResult` on the way out. The behaviour is the application's, because
+only the application knows its network stack — the SDK's
+[emulator](emulator.md) answers with `nmcli`, and a device on Android reads
+the scan results from the platform's Wi-Fi API.
+

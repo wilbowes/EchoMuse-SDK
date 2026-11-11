@@ -554,6 +554,44 @@ device.OnMicMute(func(muted bool) {
 The controller mutes a device's *output* by sending a volume of zero,
 which arrives as `OnVolumeSet` and is a different thing entirely.
 
+## 15. Answer the controller's network questions
+
+The controller can ask a device to scan for networks and to join one. The
+SDK carries the exchange; the application answers it.
+
+```go
+device.OnWifiScan(func() {
+	networks, err := scanForNetworks()
+	if err != nil {
+		// Say so. The controller waits for this answer and gives up
+		// after a timeout, and a silent device cannot be told apart
+		// from a busy one.
+		_ = device.SendWifiScanResult(protocol.WifiScanResult{Error: err.Error()})
+		return
+	}
+	_ = device.SendWifiScanResult(protocol.WifiScanResult{Networks: networks})
+})
+
+device.OnWifiChange(func(change protocol.WifiChange) {
+	err := joinNetwork(change.SSID, change.PSK)
+	result := protocol.WifiResult{SSID: change.SSID}
+	if err != nil {
+		result.Error = err.Error()
+	} else {
+		result.OK = true
+	}
+	_ = device.SendWifiResult(result)
+})
+
+device.OnWifiCommit(func() {
+	// The controller recorded the outcome. The device can stop
+	// repeating its result.
+})
+```
+
+The outcome is re-sent until the commit arrives, because a network change
+kills the connection the answer would have travelled on.
+
 ## Where the wake word runs
 
 This is the one decision with a privacy consequence, so it is worth being

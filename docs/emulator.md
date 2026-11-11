@@ -162,6 +162,7 @@ separate pending device.
 | `--boot-id ID` | the kernel's | The boot id reported at registration. |
 | `--boot-reason REASON` | empty | Why the device started. |
 | `--stats-interval DURATION` | `30s` | How often the telemetry is reported. |
+| `--no-wifi` | off | Answer the controller's network questions with an error, as a device with no network stack does. |
 
 List devices first if the default audio devices are wrong:
 
@@ -188,8 +189,8 @@ closes capture and reports the device-owned mute state; while muted, a new
 controller microphone request is ignored.
 
 The window carries a diagnostics panel showing what the emulator is
-reporting: the boot id, the kernel, the firmware version and the current
-telemetry. It is the quickest way to see what a
+reporting: the boot id, the kernel, the firmware version, the network and the
+current telemetry. It is the quickest way to see what a
 device told the controller, and the telemetry there is exactly what goes on
 the wire.
 
@@ -214,6 +215,14 @@ release, and the flash wear. The controller keeps one row per boot, so a
 device that does not send its boot id cannot tell the controller that it
 restarted rather than reconnected.
 
+**The network** is answered with `nmcli`: a scan lists the networks in
+range, and a change moves the machine onto another one. The outcome is
+reported and re-sent until the controller acknowledges it with a commit,
+because the change kills the connection the answer would have travelled on.
+`--no-wifi` turns the machine into a device with no radio, which answers
+every question with an error — the honest answer, and the one that tells
+an operator the device has no radio rather than that a scan timed out.
+
 **The microphone mute** is the device's own. The window's toggle closes the
 capture and reports the state; the controller is told and never asks.
 
@@ -234,6 +243,7 @@ are the ones the SDK does not implement:
 | `Options.BootID`, `BootReason`, `KernelArch`, `KernelRelease`, `EMMC` | The boot facts. |
 | `Options.FirmwareVersion` | The version the controller compares. |
 | `OnMicMute` | What the device does when its own mute changes. |
+| `OnWifiScan`, `OnWifiChange`, `OnWifiCommit` | The network stack. |
 
 Everything else — the connection, the registration, the reconnects, the
 credentials, the state, the audio — is the SDK's.
