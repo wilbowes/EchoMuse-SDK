@@ -52,6 +52,17 @@ type view struct {
 	Sendspin  any  `json:"sendspin,omitempty"`
 	// DeviceID is this device's identity.
 	DeviceID string `json:"device_id"`
+	// BootID identifies this boot. The controller keeps a row per boot.
+	BootID string `json:"boot_id,omitempty"`
+	// BootReason says why the machine started.
+	BootReason string `json:"boot_reason,omitempty"`
+	// Kernel is the running kernel's architecture and release.
+	Kernel string `json:"kernel,omitempty"`
+	// FirmwareVersion is the version the controller compares against the
+	// published releases.
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	// Telemetry is the current reading.
+	Telemetry any `json:"telemetry,omitempty"`
 	// ControllerURL is the controller it is joining.
 	ControllerURL  string        `json:"controller_url"`
 	Inputs         []AudioDevice `json:"inputs"`
@@ -127,21 +138,26 @@ func (s *server) handleState(w http.ResponseWriter, r *http.Request) {
 	s.emu.mu.Unlock()
 
 	v := view{
-		Phase:         s.emu.phaseValue(),
-		PhaseMsg:      s.emu.phaseMessage(),
-		Steps:         s.emu.Steps(),
-		Pattern:       string(ring.Pattern),
-		Listening:     ring.Listening,
-		LinkUp:        snap.LinkUp,
-		Approved:      snap.Approved,
-		HasCredential: s.emu.credentialSeen(),
-		Audio:         s.emu.opts.Audio.Describe(),
-		MicLevel:      level,
-		Capturing:     capturing,
-		Volume:        volume,
-		Muted:         muted,
-		DeviceID:      s.emu.opts.DeviceID,
-		ControllerURL: s.emu.opts.ControllerURL,
+		Phase:           s.emu.phaseValue(),
+		PhaseMsg:        s.emu.phaseMessage(),
+		Steps:           s.emu.Steps(),
+		Pattern:         string(ring.Pattern),
+		Listening:       ring.Listening,
+		LinkUp:          snap.LinkUp,
+		Approved:        snap.Approved,
+		HasCredential:   s.emu.credentialSeen(),
+		Audio:           s.emu.opts.Audio.Describe(),
+		MicLevel:        level,
+		Capturing:       capturing,
+		Volume:          volume,
+		Muted:           muted,
+		DeviceID:        s.emu.opts.DeviceID,
+		ControllerURL:   s.emu.opts.ControllerURL,
+		BootID:          s.emu.bootID,
+		BootReason:      s.emu.bootReason,
+		Kernel:          s.emu.kernelDescription(),
+		FirmwareVersion: s.emu.firmwareVersion(),
+		Telemetry:       s.emu.device.Stats(),
 	}
 	v.Inputs, v.Outputs = s.inputs, s.outputs
 	if selected, ok := s.emu.audio.(AudioDeviceProvider); ok {
@@ -471,6 +487,12 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!DOCTYPE html>
     background: var(--ok); transition: width 120ms linear;
   }
   .meter--silent .meter__fill { background: var(--warn); }
+  .diag { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;
+          font-family: var(--mono); font-size: 11.5px; }
+  .diag div { display: flex; justify-content: space-between; gap: 10px;
+              border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+  .diag span { color: var(--muted); }
+  .diag b { font-weight: 500; text-align: right; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -511,6 +533,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!DOCTYPE html>
           <label for="volume">Speaker volume <span id="volume-label">50%</span></label><br />
           <input id="volume" type="range" min="0" max="100" value="50" />
           <button id="mute" type="button">Mute microphone</button>
+        </div>
+
+        <h2 class="panel-title">Device diagnostics</h2>
+        <div class="diag" id="diag">
+          <div><span>Boot ID</span><b id="d-boot">—</b></div>
+          <div><span>Kernel</span><b id="d-kernel">—</b></div>
+          <div><span>Firmware</span><b id="d-firmware">—</b></div>
+          <div><span>CPU</span><b id="d-cpu">—</b></div>
+          <div><span>Memory</span><b id="d-mem">—</b></div>
+          <div><span>Storage</span><b id="d-storage">—</b></div>
+          <div><span>Flash wear</span><b id="d-emmc">—</b></div>
         </div>
       </div>
     </div>
@@ -654,6 +687,27 @@ function paintMic(v) {
   micLabelEl.textContent = v.capturing ? 'mic' : 'mic idle';
 }
 
+function paintDiag(v) {
+  // Every one of these is a measurement the device reports, and an absent
+  // one reads as "not measured" rather than as a zero.
+  const t = v.telemetry || {};
+  const rows = [
+    ['d-boot', v.boot_id || 'not measured'],
+    ['d-kernel', v.kernel || 'not measured'],
+    ['d-firmware', v.firmware_version || 'not measured'],
+    ['d-cpu', t.cpuPct == null ? 'not measured' : t.cpuPct.toFixed(1) + '%'],
+    ['d-mem', t.memUsedMb == null ? 'not measured'
+        : t.memUsedMb + ' / ' + (t.memTotalMb || '?') + ' MB'],
+    ['d-storage', t.storageUsedMb == null ? 'not measured'
+        : t.storageUsedMb + ' / ' + (t.storageTotalMb || '?') + ' MB'],
+    ['d-emmc', t.emmc ? (t.emmc.name || 'present') : 'not measured'],
+  ];
+  for (const [id, value] of rows) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+}
+
 function refresh() {  fetch('/api/state')
     .then(r => r.json())
     .then(v => {
@@ -667,6 +721,7 @@ function refresh() {  fetch('/api/state')
       paintLeds(v.leds || [], v.pattern, v.listening);
       paintSteps(v.steps || []);
       paintLcd(v);
+      paintDiag(v);
       if (document.activeElement !== volumeEl) volumeEl.value = v.volume;
       volumeLabelEl.textContent = v.volume + '%';
       muteEl.textContent = v.muted ? 'Unmute microphone' : 'Mute microphone';

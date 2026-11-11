@@ -30,12 +30,17 @@ const websocketTextMessage = 1
 // refused one has the wrong credentials.
 func (d *Device) register(ctx context.Context, p *plane) error {
 	msg := protocol.Register{
-		Type:         protocol.TypeRegister,
-		DeviceID:     d.opts.DeviceID,
-		Version:      d.opts.Version,
-		Capabilities: d.Capabilities(),
-		BaseOS:       d.opts.BaseOS,
-		Board:        d.opts.Board,
+		Type:          protocol.TypeRegister,
+		DeviceID:      d.opts.DeviceID,
+		Version:       d.firmwareVersion(),
+		Capabilities:  d.Capabilities(),
+		BaseOS:        d.opts.BaseOS,
+		Board:         d.opts.Board,
+		BootID:        d.opts.BootID,
+		BootReason:    d.opts.BootReason,
+		EMMC:          d.opts.EMMC,
+		KernelArch:    d.opts.KernelArch,
+		KernelRelease: d.opts.KernelRelease,
 	}
 
 	// The pairing flag says the device is asking to be admitted, rather

@@ -98,6 +98,13 @@ type Controller struct {
 	registered   chan struct{}
 	registerOnce sync.Once
 
+	// register is the registration the device sent, kept so a test can
+	// see what the device claims about itself.
+	register protocol.Register
+
+	// stats are the telemetry reports the device sent, in order.
+	stats []protocol.Stats
+
 	micFrames      int
 	speakerFrames  int
 	vadEnds        int
@@ -169,6 +176,20 @@ func (c *Controller) Close() {
 
 // Registered returns a channel closed once a device has registered.
 func (c *Controller) Registered() <-chan struct{} { return c.registered }
+
+// Register returns the registration the device sent.
+func (c *Controller) Register() protocol.Register {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.register
+}
+
+// Stats returns the telemetry reports the device sent, in order.
+func (c *Controller) Stats() []protocol.Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.Stats{}, c.stats...)
+}
 
 // DeviceID returns the id the device registered as.
 func (c *Controller) DeviceID() string {
@@ -291,6 +312,7 @@ func (c *Controller) handleControl(w http.ResponseWriter, r *http.Request) {
 			json.Unmarshal(data, &reg)
 			c.mu.Lock()
 			c.deviceID = reg.DeviceID
+			c.register = reg
 			c.mu.Unlock()
 			c.registerOnce.Do(func() { close(c.registered) })
 			c.answerRegister()
@@ -323,6 +345,13 @@ func (c *Controller) handleControl(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &pong) == nil && len(pong.ID) > 0 {
 				c.mu.Lock()
 				c.pongIDs = append(c.pongIDs, string(pong.ID))
+				c.mu.Unlock()
+			}
+		case protocol.TypeStats:
+			var st protocol.Stats
+			if json.Unmarshal(data, &st) == nil {
+				c.mu.Lock()
+				c.stats = append(c.stats, st)
 				c.mu.Unlock()
 			}
 		}
@@ -374,6 +403,15 @@ func (c *Controller) writeControl(v any) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return conn.WriteJSON(v)
+}
+
+// WriteControl sends a message to the device on the control plane.
+//
+// It is how a test asks the device something the controller would ask it,
+// so a flow that needs the controller to drive the device can be
+// exercised without a real controller.
+func (c *Controller) WriteControl(v any) error {
+	return c.writeControl(v)
 }
 
 // writeData sends a message on the data plane.

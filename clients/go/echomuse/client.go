@@ -81,6 +81,20 @@ type Options struct {
 	// Echo Dot's model.
 	Board string
 
+	// FirmwareVersion is the firmware version the device reports, when it
+	// is not the same as the application's own version.
+	//
+	// Version is what the application is; FirmwareVersion is what the
+	// controller compares against the published firmware releases. They are
+	// the same thing on a device whose firmware IS the application, and
+	// they differ on a device that runs on a platform the controller
+	// cannot update — a panel, a box on a desk, anything that is not an
+	// Echo.
+	//
+	// A device that leaves it empty reports Version alone, which is the
+	// right answer for a device that is updated by its own means.
+	FirmwareVersion string
+
 	// BaseOS names the userspace the device booted.
 	BaseOS protocol.BaseOS
 
@@ -156,6 +170,48 @@ type Options struct {
 
 	// ReconnectMaxDelay caps the backoff.
 	ReconnectMaxDelay time.Duration
+
+	// BootID identifies one boot of the device.
+	//
+	// The controller keeps one row per boot rather than per redial, so this
+	// is what tells a restart from a reconnect. It is the kernel's
+	// /proc/sys/kernel/random/boot_id on Linux.
+	//
+	// A device with no kernel to ask has no boot id, and leaves it empty.
+	BootID string
+
+	// BootReason says why the device started.
+	BootReason string
+
+	// EMMC is the flash wear report, sent at registration and on the
+	// stats tick.
+	//
+	// The keys the controller reads are rev, preEol, lifeA, lifeB, name,
+	// date and manfid; anything else it ignores. A device with no flash
+	// wear to report leaves it nil.
+	EMMC map[string]any
+
+	// KernelArch is the running kernel's `uname -m`.
+	KernelArch string
+
+	// KernelRelease is the running kernel's `uname -r`.
+	KernelRelease string
+
+	// StatsSource produces the periodic telemetry.
+	//
+	// The SDK calls it on a ticker and sends the result as the stats
+	// message. It is a source and not a report: the SDK does not know what
+	// a CPU percentage is, and a device that measures nothing must leave
+	// the field nil rather than report zero — a missing measurement and a
+	// measured zero are different answers.
+	//
+	// A nil source sends no stats at all.
+	StatsSource func() protocol.Stats
+
+	// StatsInterval is how often StatsSource is called.
+	//
+	// The default is 30 seconds, which is what the controller expects.
+	StatsInterval time.Duration
 
 	// Logger receives the SDK's own diagnostics. A nil logger discards
 	// them.
@@ -399,6 +455,12 @@ func (d *Device) connectAndServe(ctx context.Context) error {
 	d.state.SetLink(true)
 	d.state.SetApproved(true)
 	d.log.Info("connected", "controller", d.dialURL(link, creds), "device", d.opts.DeviceID)
+
+	// The telemetry is reported for as long as this connection lasts. A
+	// device that reconnects reports again once it is back, because a
+	// device that was off the network has no fresh measurements until it
+	// sends some.
+	d.startStats(ctx)
 
 	// Either plane dropping ends the link: the control plane carries the
 	// registration and the configuration, and the data plane carries the

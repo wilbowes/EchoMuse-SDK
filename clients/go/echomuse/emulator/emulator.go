@@ -62,6 +62,37 @@ type Options struct {
 	// that never says `mic_stop` from holding the microphone open. A
 	// zero value uses the defaults.
 	TurnConfig vad.Config
+
+	// Telemetry is the source of the periodic report.
+	//
+	// It is the emulator's own measurements of the machine it runs on:
+	// the processor, the memory, the filesystem, the flash wear and the
+	// network. A zero value measures what the machine can be asked for
+	// and leaves the rest out.
+	Telemetry Telemetry
+
+	// FirmwareVersion is the version the emulator reports to the
+	// controller.
+	//
+	// The controller compares a device's reported version against the
+	// published firmware releases and offers an update when the device is
+	// behind. The emulator is not an Echo and cannot take one, so it
+	// reports a version that is ahead of every release and the controller
+	// leaves it alone.
+	FirmwareVersion string
+
+	// BootID is the device's boot id.
+	//
+	// Empty reads the kernel's, which is what the firmware does. A
+	// device with no kernel to ask has no boot id.
+	BootID string
+
+	// BootReason is why the device started.
+	BootReason string
+
+	// StatsInterval is how often the telemetry is reported. The default
+	// is 30 seconds.
+	StatsInterval time.Duration
 }
 
 // Emulator is a device that behaves as the controller expects.
@@ -108,6 +139,14 @@ type Emulator struct {
 	phaseMsg            string
 	steps               []Step
 	listeners           []func()
+
+	// bootID identifies this boot of the machine.
+	bootID string
+	// bootReason says why the machine started.
+	bootReason string
+	// kernelArch and kernelRelease are the running kernel's.
+	kernelArch    string
+	kernelRelease string
 
 	// ctx bounds the audio streams. It is set by Run, because the
 	// callbacks that open the sound card are registered before the
@@ -174,6 +213,17 @@ func New(opts Options) (*Emulator, error) {
 		duckDB:         -18,
 		localWake:      opts.LocalWake,
 	}
+	// The boot facts, read from this machine. The kernel's arch and
+	// release are informational; the boot id is what the controller keeps
+	// a row per.
+	if opts.BootID == "" {
+		e.bootID = ReadBootID()
+	} else {
+		e.bootID = opts.BootID
+	}
+	e.bootReason = opts.BootReason
+	e.kernelArch, e.kernelRelease = ReadKernel()
+
 	e.voiceMixCond = sync.NewCond(&e.voiceMixMu)
 	if opts.LocalWake != nil {
 		threshold := opts.LocalWake.Threshold
@@ -191,12 +241,27 @@ func New(opts Options) (*Emulator, error) {
 		DeviceID:          opts.DeviceID,
 		Version:           "0.1.0",
 		Board:             "emulator",
+		BootID:            e.bootID,
+		BootReason:        e.bootReason,
+		KernelArch:        e.kernelArch,
+		KernelRelease:     e.kernelRelease,
+		EMMC:              opts.Telemetry.EMMC,
 		Capabilities:      emulatorCapabilities(opts.LocalWake != nil),
 		ControllerURL:     opts.ControllerURL,
 		ControllerTLSPort: opts.ControllerTLSPort,
 		CredentialsDir:    opts.CredentialsDir,
 		AllowLocalShell:   opts.AllowLocalShell,
 		Logger:            opts.Log,
+
+		// The firmware version is what the controller compares against the
+		// published releases, and it is not the emulator's own version.
+		// The default is ahead of every release, so the controller does
+		// not offer the emulator an update it cannot take.
+		FirmwareVersion: e.firmwareVersion(),
+
+		// The telemetry, on the SDK's ticker.
+		StatsSource:   opts.Telemetry.Sample,
+		StatsInterval: opts.StatsInterval,
 	})
 	if err != nil {
 		return nil, err

@@ -77,6 +77,10 @@ func main() {
 		classifier      = flag.String("wakeword-classifier", "", "selected wakeword classifier ONNX file.")
 		modelName       = flag.String("wakeword-model-name", "", "wakeword model identifier used by controller config; defaults to classifier filename without extension.")
 		wakeThreshold   = flag.Float64("wakeword-threshold", 0.5, "local wakeword threshold before controller config arrives.")
+		firmwareVersion = flag.String("firmware-version", "", "the firmware version to report. Empty reports a version ahead of every published release, so the controller does not offer an update.")
+		bootID          = flag.String("boot-id", "", "the boot id to report. Empty reads the kernel's.")
+		bootReason      = flag.String("boot-reason", "", "why the device started.")
+		statsInterval   = flag.Duration("stats-interval", 30*time.Second, "how often the telemetry is reported.")
 	)
 	flag.Parse()
 
@@ -130,6 +134,17 @@ func main() {
 		}
 		localWake = &emulator.LocalWakeOptions{Inferer: inferer, ModelName: name, Threshold: float32(*wakeThreshold)}
 	}
+	// The telemetry is the emulator's own measurements of this machine:
+	// the processor, the memory, the filesystem and the flash wear. What
+	// the machine cannot be asked for is left out rather than zeroed — a
+	// missing measurement and a measured zero are different answers.
+	telemetry := emulator.Telemetry{
+		EMMC: emulator.ReadEMMC(),
+	}
+	totalMb, usedMb := emulator.ReadStorage("/")
+	telemetry.StorageTotalMb = totalMb
+	telemetry.StorageUsedMb = usedMb
+
 	emu, err := emulator.New(emulator.Options{
 		ControllerURL:     *controller,
 		ControllerTLSPort: *tlsPort,
@@ -140,6 +155,11 @@ func main() {
 		AllowLocalShell:   *allowShell,
 		LocalWake:         localWake,
 		Log:               log,
+		Telemetry:         telemetry,
+		FirmwareVersion:   *firmwareVersion,
+		BootID:            *bootID,
+		BootReason:        *bootReason,
+		StatsInterval:     *statsInterval,
 	})
 	if err != nil {
 		log.Error("the emulator could not start", "error", err)

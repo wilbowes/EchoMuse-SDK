@@ -444,6 +444,13 @@ type Stats struct {
 	ThermalCoreLimit *int            `json:"thermalCoreLimit,omitempty"`
 	OWWShadow        *OWWShadowStats `json:"owwShadow,omitempty"`
 	Sendspin         any             `json:"sendspin,omitempty"`
+
+	// EMMC is the flash wear report, re-read on the device every few
+	// hours. The controller stores one row per day, on a change.
+	//
+	// The keys the controller reads are rev, preEol, lifeA, lifeB, name,
+	// date and manfid; anything else it ignores.
+	EMMC map[string]any `json:"emmc,omitempty"`
 }
 
 // Refused says the device was not admitted: the link credentials were
