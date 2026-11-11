@@ -276,6 +276,7 @@ type Device struct {
 	onListenAck            []func(session uint32)
 	onListenClose          []func(protocol.ListenClose)
 	onSendspinTokenRequest []func()
+	onMicMute              []func(muted bool)
 	onWifiScan             []func()
 	onWifiChange           []func(change protocol.WifiChange)
 	onWifiCommit           []func()

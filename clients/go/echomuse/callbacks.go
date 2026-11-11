@@ -155,6 +155,15 @@ func (d *Device) OnSendspinTokenRequest(fn func()) {
 	d.callbacksMu.Unlock()
 }
 
+func (d *Device) emitMicMute(muted bool) {
+	d.callbacksMu.RLock()
+	fns := append([]func(bool){}, d.onMicMute...)
+	d.callbacksMu.RUnlock()
+	for _, fn := range fns {
+		fn(muted)
+	}
+}
+
 func (d *Device) emitWifiScan() {
 	d.callbacksMu.RLock()
 	fns := append([]func(){}, d.onWifiScan...)
@@ -198,6 +207,22 @@ func (d *Device) emitSendspinTokenRequest() {
 	for _, fn := range fns {
 		fn()
 	}
+}
+
+// OnMicMute registers a handler for the device's own microphone mute.
+//
+// Mute is device-sovereign: the device holds the authority and the
+// controller is told, never the reverse. So this is not a callback for a
+// command — there is no controller message that mutes a microphone — but
+// the place an application reports that its own mute switch moved.
+//
+// The handler is called with the new state, and the SDK sends the mute
+// state to the controller. An application that wants to drive the mute
+// itself calls SendMicMute, which does the same thing.
+func (d *Device) OnMicMute(fn func(muted bool)) {
+	d.callbacksMu.Lock()
+	d.onMicMute = append(d.onMicMute, fn)
+	d.callbacksMu.Unlock()
 }
 
 // OnWifiScan registers a handler for the controller asking the device to

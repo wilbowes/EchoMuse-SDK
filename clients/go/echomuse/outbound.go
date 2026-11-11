@@ -163,6 +163,21 @@ func (d *Device) SendMuteState(muted bool) error {
 	return d.sendControl(protocol.MuteState{Type: protocol.TypeMuteState, Muted: muted})
 }
 
+// SendMicMute reports the device's own microphone mute and tells the
+// application about it.
+//
+// It is the same message as SendMuteState — the wire has one mute state —
+// and it also calls the OnMicMute handlers, so an application that drives
+// its own mute switch has one call to make and one place to be told.
+//
+// Mute here is the MICROPHONE's mute, not the output's. The controller
+// mutes the output by sending a volume of zero, and that is a different
+// thing entirely.
+func (d *Device) SendMicMute(muted bool) error {
+	d.emitMicMute(muted)
+	return d.SendMuteState(muted)
+}
+
 // SendWifiScanResult answers the controller's scan request.
 //
 // A device that cannot scan sends the error rather than nothing: the

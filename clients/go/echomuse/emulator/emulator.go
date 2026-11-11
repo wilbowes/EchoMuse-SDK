@@ -376,6 +376,9 @@ func New(opts Options) (*Emulator, error) {
 	})
 	device.OnVolumeSet(func(level int) { e.setVolume(level) })
 	device.OnListenAck(func(session uint32) { e.log.Info("private wake accepted", "session", session) })
+	device.OnMicMute(func(muted bool) {
+		e.log.Info("the microphone mute changed", "muted", muted)
+	})
 	device.OnWifiScan(func() { e.scanWifi() })
 	device.OnWifiChange(func(change protocol.WifiChange) { e.changeWifi(change) })
 	device.OnWifiCommit(func() { e.SetWifiCommit() })
@@ -462,7 +465,7 @@ func (e *Emulator) SetMuted(muted bool) error {
 	} else if ctx != nil && (wakeMode != "" || e.device.State().Snapshot().Listening) {
 		e.StartCapture(ctx)
 	}
-	return e.device.SendMuteState(muted)
+	return e.device.SendMicMute(muted)
 }
 
 // SelectAudioDevices asks the injected backend to switch voice endpoints.
